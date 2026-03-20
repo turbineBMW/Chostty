@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Read version from Cargo.toml (single source of truth)
-VERSION="${1:-$(grep '^version' "$ROOT_DIR/rust/cmux-host-linux/Cargo.toml" | head -1 | sed 's/.*"\(.*\)"/\1/')}"
+VERSION="${1:-$(grep '^version' "$ROOT_DIR/rust/limux-host-linux/Cargo.toml" | head -1 | sed 's/.*"\(.*\)"/\1/')}"
 ARCH="$(uname -m)"
 DEB_ARCH="amd64"
 [ "$ARCH" = "aarch64" ] && DEB_ARCH="arm64"
@@ -12,9 +12,9 @@ DEB_ARCH="amd64"
 PKG_BASE="limux-${VERSION}-linux-${ARCH}"
 STAGE="/tmp/limux-staging"
 GHOSTTY_SO="${ROOT_DIR}/ghostty/zig-out/lib/libghostty.so"
-ICONS_DIR="${ROOT_DIR}/rust/cmux-host-linux/icons"
-APP_ICONS_DIR="${ROOT_DIR}/rust/cmux-host-linux/icons/app"
-DESKTOP_FILE="${ROOT_DIR}/rust/cmux-host-linux/limux.desktop"
+ICONS_DIR="${ROOT_DIR}/rust/limux-host-linux/icons"
+APP_ICONS_DIR="${ROOT_DIR}/rust/limux-host-linux/icons/app"
+DESKTOP_FILE="${ROOT_DIR}/rust/limux-host-linux/limux.desktop"
 OUT_DIR="${ROOT_DIR}/dist"
 
 echo "=== Limux Packager ==="
@@ -32,7 +32,7 @@ fi
 echo "Building release binary..."
 cargo build --release --manifest-path "${ROOT_DIR}/Cargo.toml"
 
-BINARY="${ROOT_DIR}/target/release/cmux-linux"
+BINARY="${ROOT_DIR}/target/release/limux"
 if [ ! -f "$BINARY" ]; then
     echo "ERROR: Binary not found at ${BINARY}"
     exit 1
@@ -157,9 +157,9 @@ if $UNINSTALL; then
     for size in 16 32 128 256 512; do
         rm -f "$PREFIX/share/icons/hicolor/${size}x${size}/apps/limux.png"
     done
-    rm -f "$PREFIX/share/icons/hicolor/scalable/actions/cmux-globe-symbolic.svg"
-    rm -f "$PREFIX/share/icons/hicolor/scalable/actions/cmux-split-horizontal-symbolic.svg"
-    rm -f "$PREFIX/share/icons/hicolor/scalable/actions/cmux-split-vertical-symbolic.svg"
+    rm -f "$PREFIX/share/icons/hicolor/scalable/actions/limux-globe-symbolic.svg"
+    rm -f "$PREFIX/share/icons/hicolor/scalable/actions/limux-split-horizontal-symbolic.svg"
+    rm -f "$PREFIX/share/icons/hicolor/scalable/actions/limux-split-vertical-symbolic.svg"
     gtk-update-icon-cache -f -t "$PREFIX/share/icons/hicolor" 2>/dev/null || true
     update-desktop-database "$PREFIX/share/applications" 2>/dev/null || true
     echo "Limux uninstalled."

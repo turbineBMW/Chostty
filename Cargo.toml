@@ -1,16 +1,16 @@
 [workspace]
 members = [
-  "rust/cmux-protocol",
-  "rust/cmux-core",
-  "rust/cmux-control",
-  "rust/cmux-cli",
-  "rust/cmux-ghostty-sys",
-  "rust/cmux-host-linux",
+  "rust/limux-protocol",
+  "rust/limux-core",
+  "rust/limux-control",
+  "rust/limux-cli",
+  "rust/limux-ghostty-sys",
+  "rust/limux-host-linux",
 ]
 resolver = "2"
 
 [workspace.package]
-authors = ["cmux contributors"]
+authors = ["limux contributors"]
 edition = "2021"
 license = "MIT"
 version = "0.1.0"

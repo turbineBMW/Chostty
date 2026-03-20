@@ -69,7 +69,7 @@ sudo apt install libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev pkg-config b
 cargo build --release
 
 # Run (point to libghostty.so location)
-LD_LIBRARY_PATH=../ghostty/zig-out/lib:$LD_LIBRARY_PATH ./target/release/cmux-linux
+LD_LIBRARY_PATH=../ghostty/zig-out/lib:$LD_LIBRARY_PATH ./target/release/limux
 ```
 
 ### Package a release tarball
@@ -101,12 +101,12 @@ This builds the binary, bundles `libghostty.so`, icons, and an install script in
 
 ```
 rust/
-  cmux-host-linux/    # GTK4/Adwaita UI (window, sidebar, panes, tabs)
-  cmux-ghostty-sys/   # FFI bindings to libghostty
-  cmux-core/          # Command dispatcher and state engine
-  cmux-protocol/      # Socket wire format types
-  cmux-control/       # Unix socket server
-  cmux-cli/           # CLI client
+  limux-host-linux/    # GTK4/Adwaita UI (window, sidebar, panes, tabs)
+  limux-ghostty-sys/   # FFI bindings to libghostty
+  limux-core/          # Command dispatcher and state engine
+  limux-protocol/      # Socket wire format types
+  limux-control/       # Unix socket server
+  limux-cli/           # CLI client
 ```
 
 The terminal rendering is handled entirely by Ghostty's embedded library (`libghostty.so`), which provides GPU-accelerated OpenGL rendering. The UI layer is native GTK4 with libadwaita.

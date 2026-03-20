@@ -172,74 +172,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "cmux-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "cmux-control",
- "cmux-protocol",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "cmux-control"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "cmux-core",
- "cmux-protocol",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "cmux-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cmux-protocol",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "cmux-ghostty-sys"
-version = "0.1.0"
-dependencies = [
- "cc",
-]
-
-[[package]]
-name = "cmux-host-linux"
-version = "0.1.0"
-dependencies = [
- "cmux-ghostty-sys",
- "dirs",
- "gtk4",
- "libadwaita",
- "serde",
- "serde_json",
- "uuid",
- "webkit6",
-]
-
-[[package]]
-name = "cmux-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -777,6 +709,74 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1744e39d1d6a9948f4f388969627434e31128196de472883b39f148769bfe30a"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "limux-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "limux-control",
+ "limux-protocol",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "limux-control"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "limux-core",
+ "limux-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "limux-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "limux-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "limux-ghostty-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "limux-host-linux"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "gtk4",
+ "libadwaita",
+ "limux-ghostty-sys",
+ "serde",
+ "serde_json",
+ "uuid",
+ "webkit6",
+]
+
+[[package]]
+name = "limux-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
