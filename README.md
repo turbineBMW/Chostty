@@ -1,6 +1,8 @@
 # Limux
 
-A GPU-accelerated terminal workspace manager for Linux, powered by Ghostty's rendering engine.
+A GPU-accelerated terminal workspace manager for Linux, powered by Ghostty's rendering engine. A special thanks to the cmux contributors who inspired this build. 
+
+If you are on Mac, please visit https://github.com/manaflow-ai/cmux to download the original. 
 
 https://github.com/user-attachments/assets/6f3047c2-e2b6-49f2-b536-570a1570d0f8
 
