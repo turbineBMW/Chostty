@@ -1,3 +1,4 @@
+mod layout_state;
 mod pane;
 mod terminal;
 mod window;

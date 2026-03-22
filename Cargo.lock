@@ -766,6 +766,7 @@ dependencies = [
  "limux-ghostty-sys",
  "serde",
  "serde_json",
+ "tempfile",
  "uuid",
  "webkit6",
 ]

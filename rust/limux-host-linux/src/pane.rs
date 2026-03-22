@@ -4,12 +4,14 @@
 //!
 //! All on one line. Tabs left-justified, icons right-justified.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
+use crate::layout_state::{PaneState, TabContentState, TabState as SavedTabState};
 use crate::terminal::{self, TerminalCallbacks};
 
 // ---------------------------------------------------------------------------
@@ -22,6 +24,7 @@ pub struct PaneCallbacks {
     pub on_bell: Box<dyn Fn()>,
     pub on_pwd_changed: Box<dyn Fn(&str)>,
     pub on_empty: Box<dyn Fn(&gtk::Widget)>,
+    pub on_state_changed: Box<dyn Fn()>,
 }
 
 // ---------------------------------------------------------------------------
@@ -127,10 +130,15 @@ pub const PANE_CSS: &str = r#"
 // PaneWidget builder
 // ---------------------------------------------------------------------------
 
-pub fn create_pane(callbacks: Rc<PaneCallbacks>, working_directory: Option<&str>) -> gtk::Box {
+pub fn create_pane(
+    callbacks: Rc<PaneCallbacks>,
+    working_directory: Option<&str>,
+    initial_state: Option<&PaneState>,
+) -> gtk::Box {
     // Store workspace working directory for new tabs/splits to inherit
-    let ws_wd: Rc<std::cell::RefCell<Option<String>>> =
-        Rc::new(std::cell::RefCell::new(working_directory.map(|s| s.to_string())));
+    let ws_wd: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(
+        working_directory.map(|s| s.to_string()),
+    ));
 
     let outer = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -188,15 +196,27 @@ pub fn create_pane(callbacks: Rc<PaneCallbacks>, working_directory: Option<&str>
         active_tab: None,
     }));
 
-    // Add first terminal tab
-    add_terminal_tab_inner(
-        &tab_strip,
-        &content_stack,
-        &tab_state,
-        &callbacks,
-        working_directory,
-        &outer,
-    );
+    if let Some(saved_state) = initial_state {
+        restore_tabs_from_state(
+            &tab_strip,
+            &content_stack,
+            &tab_state,
+            &callbacks,
+            working_directory,
+            &outer,
+            saved_state,
+        );
+    } else {
+        add_terminal_tab_inner(
+            &tab_strip,
+            &content_stack,
+            &tab_state,
+            &callbacks,
+            working_directory,
+            &outer,
+            None,
+        );
+    }
 
     // Wire action buttons
     {
@@ -208,7 +228,7 @@ pub fn create_pane(callbacks: Rc<PaneCallbacks>, working_directory: Option<&str>
         let wd = ws_wd.clone();
         new_term_btn.connect_clicked(move |_| {
             let dir = wd.borrow().clone();
-            add_terminal_tab_inner(&ts, &cs, &state, &cb, dir.as_deref(), &ow);
+            add_terminal_tab_inner(&ts, &cs, &state, &cb, dir.as_deref(), &ow, None);
         });
     }
     {
@@ -218,7 +238,7 @@ pub fn create_pane(callbacks: Rc<PaneCallbacks>, working_directory: Option<&str>
         let cb = callbacks.clone();
         let ow = outer.clone();
         new_browser_btn.connect_clicked(move |_| {
-            add_browser_tab_inner(&ts, &cs, &state, &cb, &ow);
+            add_browser_tab_inner(&ts, &cs, &state, &cb, &ow, None);
         });
     }
     {
@@ -295,11 +315,18 @@ pub fn cycle_tab_in_pane(pane_widget: &gtk::Widget, delta: i32) {
         &internals.tab_state,
         &new_id,
     );
+    (internals.callbacks.on_state_changed)();
 }
 
 // ---------------------------------------------------------------------------
 // Internal tab state
 // ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+enum TabKind {
+    Terminal { cwd: Rc<RefCell<Option<String>>> },
+    Browser { uri: Rc<RefCell<Option<String>>> },
+}
 
 struct TabEntry {
     id: String,
@@ -309,6 +336,7 @@ struct TabEntry {
     content: gtk::Widget,
     custom_name: Option<String>,
     pinned: bool,
+    kind: TabKind,
 }
 
 struct TabState {
@@ -381,15 +409,99 @@ fn split_icon_button(orientation: gtk::Orientation, tooltip: &str) -> gtk::Butto
 // Tab creation
 // ---------------------------------------------------------------------------
 
-fn add_terminal_tab_inner(
+struct TerminalTabOptions<'a> {
+    id: Option<&'a str>,
+    custom_name: Option<&'a str>,
+    pinned: bool,
+    cwd: Option<&'a str>,
+}
+
+struct BrowserTabOptions<'a> {
+    id: Option<&'a str>,
+    custom_name: Option<&'a str>,
+    pinned: bool,
+    uri: Option<&'a str>,
+}
+
+fn restore_tabs_from_state(
     tab_strip: &gtk::Box,
     content_stack: &gtk::Stack,
-    tab_state: &Rc<std::cell::RefCell<TabState>>,
+    tab_state: &Rc<RefCell<TabState>>,
     callbacks: &Rc<PaneCallbacks>,
     working_directory: Option<&str>,
     pane_outer: &gtk::Box,
+    saved_state: &PaneState,
 ) {
-    let tab_id = next_tab_id();
+    if saved_state.tabs.is_empty() {
+        add_terminal_tab_inner(
+            tab_strip,
+            content_stack,
+            tab_state,
+            callbacks,
+            working_directory,
+            pane_outer,
+            None,
+        );
+        return;
+    }
+
+    for saved_tab in &saved_state.tabs {
+        match &saved_tab.content {
+            TabContentState::Terminal { cwd } => add_terminal_tab_inner(
+                tab_strip,
+                content_stack,
+                tab_state,
+                callbacks,
+                cwd.as_deref().or(working_directory),
+                pane_outer,
+                Some(TerminalTabOptions {
+                    id: Some(saved_tab.id.as_str()),
+                    custom_name: saved_tab.custom_name.as_deref(),
+                    pinned: saved_tab.pinned,
+                    cwd: cwd.as_deref().or(working_directory),
+                }),
+            ),
+            TabContentState::Browser { uri } => add_browser_tab_inner(
+                tab_strip,
+                content_stack,
+                tab_state,
+                callbacks,
+                pane_outer,
+                Some(BrowserTabOptions {
+                    id: Some(saved_tab.id.as_str()),
+                    custom_name: saved_tab.custom_name.as_deref(),
+                    pinned: saved_tab.pinned,
+                    uri: uri.as_deref(),
+                }),
+            ),
+        }
+    }
+
+    let active_tab_id = saved_state
+        .active_tab_id
+        .as_deref()
+        .filter(|candidate| tab_state.borrow().tabs.iter().any(|tab| tab.id == *candidate))
+        .map(|value| value.to_string())
+        .or_else(|| tab_state.borrow().tabs.first().map(|tab| tab.id.clone()));
+
+    if let Some(active_tab_id) = active_tab_id {
+        activate_tab(tab_strip, content_stack, tab_state, &active_tab_id);
+    }
+}
+
+fn add_terminal_tab_inner(
+    tab_strip: &gtk::Box,
+    content_stack: &gtk::Stack,
+    tab_state: &Rc<RefCell<TabState>>,
+    callbacks: &Rc<PaneCallbacks>,
+    working_directory: Option<&str>,
+    pane_outer: &gtk::Box,
+    options: Option<TerminalTabOptions<'_>>,
+) {
+    let tab_id = options
+        .as_ref()
+        .and_then(|value| value.id.map(|id| id.to_string()))
+        .unwrap_or_else(next_tab_id);
 
     // Tab label button
     let (tab_btn, title_label) = build_tab_button(
@@ -403,6 +515,12 @@ fn add_terminal_tab_inner(
     );
 
     // Build Ghostty terminal callbacks for title/bell/close
+    let term_cwd = Rc::new(RefCell::new(
+        options
+            .as_ref()
+            .and_then(|value| value.cwd.map(|cwd| cwd.to_string()))
+            .or_else(|| working_directory.map(|cwd| cwd.to_string())),
+    ));
     let term_callbacks = {
         let tl = title_label.clone();
         let state_for_title = tab_state.clone();
@@ -414,6 +532,8 @@ fn add_terminal_tab_inner(
         let tid_for_close = tab_id.clone();
         let cb_close = callbacks.clone();
         let po = pane_outer.clone();
+        let cb_state = callbacks.clone();
+        let term_cwd_for_pwd = term_cwd.clone();
 
         TerminalCallbacks {
             on_title_changed: Box::new(move |title: &str| {
@@ -440,7 +560,9 @@ fn add_terminal_tab_inner(
             on_pwd_changed: Box::new({
                 let cb_pwd = callbacks.clone();
                 move |pwd: &str| {
+                    *term_cwd_for_pwd.borrow_mut() = Some(pwd.to_string());
                     (cb_pwd.on_pwd_changed)(pwd);
+                    (cb_state.on_state_changed)();
                 }
             }),
             on_close: Box::new(move || {
@@ -483,26 +605,56 @@ fn add_terminal_tab_inner(
         ts.tabs.push(TabEntry {
             id: tab_id.clone(),
             tab_button: tab_btn,
-            title_label,
+            title_label: title_label.clone(),
             content: widget,
-            custom_name: None,
-            pinned: false,
+            custom_name: options
+                .as_ref()
+                .and_then(|value| value.custom_name.map(|name| name.to_string())),
+            pinned: options.as_ref().map(|value| value.pinned).unwrap_or(false),
+            kind: TabKind::Terminal {
+                cwd: term_cwd.clone(),
+            },
         });
+    }
+
+    if let Some(custom_name) = options.as_ref().and_then(|value| value.custom_name) {
+        title_label.set_label(custom_name);
+    }
+    if options.as_ref().map(|value| value.pinned).unwrap_or(false) {
+        if let Some(entry) = tab_state.borrow().tabs.iter().find(|entry| entry.id == tab_id) {
+            apply_pin_visuals(&entry.tab_button, true);
+        }
     }
 
     activate_tab(tab_strip, content_stack, tab_state, &tab_id);
     term.grab_focus();
+    if options.is_none() {
+        (callbacks.on_state_changed)();
+    }
 }
 
 fn add_browser_tab_inner(
     tab_strip: &gtk::Box,
     content_stack: &gtk::Stack,
-    tab_state: &Rc<std::cell::RefCell<TabState>>,
+    tab_state: &Rc<RefCell<TabState>>,
     callbacks: &Rc<PaneCallbacks>,
     pane_outer: &gtk::Box,
+    options: Option<BrowserTabOptions<'_>>,
 ) {
-    let tab_id = next_tab_id();
-    let (widget, title) = create_browser_widget();
+    let tab_id = options
+        .as_ref()
+        .and_then(|value| value.id.map(|id| id.to_string()))
+        .unwrap_or_else(next_tab_id);
+    let saved_uri = Rc::new(RefCell::new(
+        options
+            .as_ref()
+            .and_then(|value| value.uri.map(|uri| uri.to_string())),
+    ));
+    let (widget, title) = create_browser_widget(
+        options.as_ref().and_then(|value| value.uri),
+        saved_uri.clone(),
+        callbacks.clone(),
+    );
 
     let (tab_btn, title_label) = build_tab_button(
         &title,
@@ -521,14 +673,31 @@ fn add_browser_tab_inner(
         ts.tabs.push(TabEntry {
             id: tab_id.clone(),
             tab_button: tab_btn,
-            title_label,
+            title_label: title_label.clone(),
             content: widget,
-            custom_name: None,
-            pinned: false,
+            custom_name: options
+                .as_ref()
+                .and_then(|value| value.custom_name.map(|name| name.to_string())),
+            pinned: options.as_ref().map(|value| value.pinned).unwrap_or(false),
+            kind: TabKind::Browser {
+                uri: saved_uri.clone(),
+            },
         });
     }
 
+    if let Some(custom_name) = options.as_ref().and_then(|value| value.custom_name) {
+        title_label.set_label(custom_name);
+    }
+    if options.as_ref().map(|value| value.pinned).unwrap_or(false) {
+        if let Some(entry) = tab_state.borrow().tabs.iter().find(|entry| entry.id == tab_id) {
+            apply_pin_visuals(&entry.tab_button, true);
+        }
+    }
+
     activate_tab(tab_strip, content_stack, tab_state, &tab_id);
+    if options.is_none() {
+        (callbacks.on_state_changed)();
+    }
 }
 
 // Public wrappers for keyboard shortcut use
@@ -543,6 +712,7 @@ pub fn add_terminal_tab_to_pane(pane_widget: &gtk::Widget) {
             &internals.callbacks,
             dir.as_deref(),
             &internals.pane_outer,
+            None,
         );
     }
 }
@@ -556,8 +726,38 @@ pub fn add_browser_tab_to_pane(pane_widget: &gtk::Widget) {
             &internals.tab_state,
             &internals.callbacks,
             &internals.pane_outer,
+            None,
         );
     }
+}
+
+pub fn snapshot_pane_state(pane_widget: &gtk::Widget) -> Option<PaneState> {
+    let internals = find_pane_internals(pane_widget)?;
+    let ts = internals.tab_state.borrow();
+    let tabs = ts
+        .tabs
+        .iter()
+        .map(|entry| {
+            let content = match &entry.kind {
+                TabKind::Terminal { cwd } => TabContentState::Terminal {
+                    cwd: cwd.borrow().clone(),
+                },
+                TabKind::Browser { uri } => TabContentState::Browser {
+                    uri: uri.borrow().clone(),
+                },
+            };
+            SavedTabState {
+                id: entry.id.clone(),
+                custom_name: entry.custom_name.clone(),
+                pinned: entry.pinned,
+                content,
+            }
+        })
+        .collect();
+    Some(PaneState {
+        active_tab_id: ts.active_tab.clone(),
+        tabs,
+    })
 }
 
 #[allow(dead_code)]
@@ -570,6 +770,18 @@ fn find_pane_internals(pane_widget: &gtk::Widget) -> Option<Rc<PaneInternals>> {
     }
 }
 
+fn apply_pin_visuals(tab_button: &gtk::Box, pinned: bool) {
+    if let Some(close_widget) = tab_button.last_child() {
+        close_widget.set_visible(!pinned);
+    }
+    if let Some(inner_box) = tab_button.first_child().and_then(|child| child.downcast::<gtk::Box>().ok()) {
+        if let Some(pin_icon) = inner_box.first_child().and_then(|child| child.downcast::<gtk::Label>().ok()) {
+            pin_icon.set_label(if pinned { "📌" } else { "" });
+            pin_icon.set_visible(pinned);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tab button (label + close)
 // ---------------------------------------------------------------------------
@@ -579,7 +791,7 @@ fn build_tab_button(
     tab_id: &str,
     tab_strip: &gtk::Box,
     content_stack: &gtk::Stack,
-    tab_state: &Rc<std::cell::RefCell<TabState>>,
+    tab_state: &Rc<RefCell<TabState>>,
     callbacks: &Rc<PaneCallbacks>,
     pane_outer: &gtk::Box,
 ) -> (gtk::Box, gtk::Label) {
@@ -622,8 +834,10 @@ fn build_tab_button(
         let ts = tab_strip.clone();
         let cs = content_stack.clone();
         let state = tab_state.clone();
+        let callbacks = callbacks.clone();
         click.connect_pressed(move |_, _, _, _| {
             activate_tab(&ts, &cs, &state, &tid);
+            (callbacks.on_state_changed)();
         });
     }
     tab_btn.add_controller(click);
@@ -665,10 +879,11 @@ fn build_tab_button(
         let tid = tab_id.to_string();
         let ts = tab_strip.clone();
         let state = tab_state.clone();
+        let callbacks = callbacks.clone();
         drop_target.connect_drop(move |_, value, _, _| {
             if let Ok(source_id) = value.get::<String>() {
                 if source_id != tid {
-                    reorder_tab(&ts, &state, &source_id, &tid);
+                    reorder_tab(&ts, &state, &source_id, &tid, &callbacks);
                     return true;
                 }
             }
@@ -703,7 +918,7 @@ fn show_tab_context_menu(
     tab_id: &str,
     tab_strip: &gtk::Box,
     content_stack: &gtk::Stack,
-    tab_state: &Rc<std::cell::RefCell<TabState>>,
+    tab_state: &Rc<RefCell<TabState>>,
     callbacks: &Rc<PaneCallbacks>,
     pane_outer: &gtk::Box,
     label: &gtk::Label,
@@ -724,9 +939,10 @@ fn show_tab_context_menu(
         let state = tab_state.clone();
         let tid = tab_id.to_string();
         let menu_ref = menu.clone();
+        let callbacks = callbacks.clone();
         rename_btn.connect_clicked(move |_| {
             menu_ref.popdown();
-            show_rename_dialog(&lbl, &state, &tid);
+            show_rename_dialog(&lbl, &state, &tid, &callbacks);
         });
     }
 
@@ -745,18 +961,21 @@ fn show_tab_context_menu(
         let pin = pin_icon.clone();
         let close = tab_btn.last_child(); // close button
         let menu_ref = menu.clone();
+        let callbacks = callbacks.clone();
         pin_btn.connect_clicked(move |_| {
             menu_ref.popdown();
             let mut ts = state.borrow_mut();
             if let Some(entry) = ts.find_tab_mut(&tid) {
                 entry.pinned = !entry.pinned;
+                apply_pin_visuals(&entry.tab_button, entry.pinned);
                 pin.set_label(if entry.pinned { "📌" } else { "" });
                 pin.set_visible(entry.pinned);
-                // Hide close button on pinned tabs
                 if let Some(close_widget) = &close {
                     close_widget.set_visible(!entry.pinned);
                 }
             }
+            drop(ts);
+            (callbacks.on_state_changed)();
         });
     }
 
@@ -797,8 +1016,9 @@ fn show_tab_context_menu(
 
 fn show_rename_dialog(
     label: &gtk::Label,
-    tab_state: &Rc<std::cell::RefCell<TabState>>,
+    tab_state: &Rc<RefCell<TabState>>,
     tab_id: &str,
+    callbacks: &Rc<PaneCallbacks>,
 ) {
     let current_name = label.label().to_string();
 
@@ -834,6 +1054,7 @@ fn show_rename_dialog(
         let state = state.clone();
         let tid = tid.clone();
         let parent = parent_for_cleanup.clone();
+        let callbacks = callbacks.clone();
         move |entry: &gtk::Entry| {
             if commit.get() {
                 return;
@@ -849,6 +1070,7 @@ fn show_rename_dialog(
             }
             lbl.set_visible(true);
             parent.remove(entry);
+            (callbacks.on_state_changed)();
         }
     };
 
@@ -874,9 +1096,10 @@ fn show_rename_dialog(
 
 fn reorder_tab(
     tab_strip: &gtk::Box,
-    tab_state: &Rc<std::cell::RefCell<TabState>>,
+    tab_state: &Rc<RefCell<TabState>>,
     source_id: &str,
     target_id: &str,
+    callbacks: &Rc<PaneCallbacks>,
 ) {
     let mut ts = tab_state.borrow_mut();
 
@@ -903,6 +1126,7 @@ fn reorder_tab(
     for btn in &buttons {
         tab_strip.append(btn);
     }
+    (callbacks.on_state_changed)();
 }
 
 // ---------------------------------------------------------------------------
@@ -912,10 +1136,13 @@ fn reorder_tab(
 fn activate_tab(
     _tab_strip: &gtk::Box,
     content_stack: &gtk::Stack,
-    tab_state: &Rc<std::cell::RefCell<TabState>>,
+    tab_state: &Rc<RefCell<TabState>>,
     tab_id: &str,
 ) {
     let mut ts = tab_state.borrow_mut();
+    if ts.active_tab.as_deref() == Some(tab_id) {
+        return;
+    }
     ts.active_tab = Some(tab_id.to_string());
 
     // Update visual state on all tabs
@@ -946,7 +1173,7 @@ fn activate_tab(
 fn remove_tab(
     tab_strip: &gtk::Box,
     content_stack: &gtk::Stack,
-    tab_state: &Rc<std::cell::RefCell<TabState>>,
+    tab_state: &Rc<RefCell<TabState>>,
     tab_id: &str,
     callbacks: &Rc<PaneCallbacks>,
     pane_outer: &gtk::Box,
@@ -975,6 +1202,7 @@ fn remove_tab(
     if was_active {
         activate_tab(tab_strip, content_stack, tab_state, &new_id);
     }
+    (callbacks.on_state_changed)();
 }
 
 // ---------------------------------------------------------------------------
@@ -982,7 +1210,11 @@ fn remove_tab(
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "webkit")]
-fn create_browser_widget() -> (gtk::Widget, String) {
+fn create_browser_widget(
+    initial_uri: Option<&str>,
+    saved_uri: Rc<RefCell<Option<String>>>,
+    callbacks: Rc<PaneCallbacks>,
+) -> (gtk::Widget, String) {
     use webkit6::prelude::*;
 
     // Use a NetworkSession to avoid sandbox issues
@@ -1050,10 +1282,20 @@ fn create_browser_widget() -> (gtk::Widget, String) {
     }
     {
         let entry = url_entry.clone();
+        let saved_uri = saved_uri.clone();
+        let callbacks = callbacks.clone();
+        let restoring = Rc::new(std::cell::Cell::new(initial_uri.is_some()));
+        let restoring_flag = restoring.clone();
         webview.connect_uri_notify(move |wv| {
             if let Some(uri) = wv.uri() {
                 let uri_str: String = uri.into();
                 entry.set_text(&uri_str);
+                if restoring_flag.get() && (uri_str.is_empty() || uri_str == "about:blank") {
+                    return;
+                }
+                restoring_flag.set(false);
+                *saved_uri.borrow_mut() = Some(uri_str);
+                (callbacks.on_state_changed)();
             }
         });
     }
@@ -1069,10 +1311,15 @@ fn create_browser_widget() -> (gtk::Widget, String) {
     {
         let wv = webview.clone();
         let loaded = std::cell::Cell::new(false);
+        let initial_uri = initial_uri.map(|value| value.to_string());
         vbox.connect_map(move |_| {
             if !loaded.get() {
                 loaded.set(true);
-                wv.load_uri("https://google.com");
+                if let Some(uri) = &initial_uri {
+                    wv.load_uri(uri);
+                } else {
+                    wv.load_uri("https://google.com");
+                }
             }
         });
     }
@@ -1085,7 +1332,12 @@ fn create_browser_widget() -> (gtk::Widget, String) {
 }
 
 #[cfg(not(feature = "webkit"))]
-fn create_browser_widget() -> (gtk::Widget, String) {
+fn create_browser_widget(
+    initial_uri: Option<&str>,
+    saved_uri: Rc<RefCell<Option<String>>>,
+    _callbacks: Rc<PaneCallbacks>,
+) -> (gtk::Widget, String) {
+    *saved_uri.borrow_mut() = initial_uri.map(|value| value.to_string());
     let placeholder = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .halign(gtk::Align::Center)
