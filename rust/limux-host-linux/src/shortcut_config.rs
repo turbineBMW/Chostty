@@ -1,3 +1,12 @@
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde::Deserialize;
+
+pub const CONFIG_DIR_NAME: &str = "limux";
+pub const CONFIG_FILE_NAME: &str = "config.json";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShortcutId {
     NewWorkspace,
@@ -58,6 +67,7 @@ pub enum ShortcutCommand {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShortcutDefinition {
     pub id: ShortcutId,
+    pub config_key: &'static str,
     pub action_name: &'static str,
     pub default_accel: &'static str,
     pub label: &'static str,
@@ -65,9 +75,53 @@ pub struct ShortcutDefinition {
     pub command: ShortcutCommand,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NormalizedShortcut {
+    key: String,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    meta: bool,
+    super_key: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedShortcut {
+    pub definition: &'static ShortcutDefinition,
+    pub binding: Option<NormalizedShortcut>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedShortcutConfig {
+    pub shortcuts: Vec<ResolvedShortcut>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ShortcutConfigError {
+    InvalidBindingFormat { input: String },
+    MissingKey { input: String },
+    UnknownModifier { input: String, modifier: String },
+    InvalidBindingType { shortcut_id: String },
+    DuplicateBinding {
+        first: ShortcutId,
+        second: ShortcutId,
+        accel: String,
+    },
+    InvalidJson(String),
+    Io(String),
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ShortcutConfigFile {
+    #[serde(default)]
+    shortcuts: HashMap<String, serde_json::Value>,
+}
+
 const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     ShortcutDefinition {
         id: ShortcutId::NewWorkspace,
+        config_key: "new_workspace",
         action_name: "win.new-workspace",
         default_accel: "<Ctrl><Shift>n",
         label: "New Workspace",
@@ -76,6 +130,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::CloseWorkspace,
+        config_key: "close_workspace",
         action_name: "win.close-workspace",
         default_accel: "<Ctrl><Shift>w",
         label: "Close Workspace",
@@ -84,6 +139,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::ToggleSidebar,
+        config_key: "toggle_sidebar",
         action_name: "win.toggle-sidebar",
         default_accel: "<Ctrl>b",
         label: "Toggle Sidebar",
@@ -92,6 +148,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::NextWorkspace,
+        config_key: "next_workspace",
         action_name: "win.next-workspace",
         default_accel: "<Ctrl>Page_Down",
         label: "Next Workspace",
@@ -100,6 +157,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::PrevWorkspace,
+        config_key: "prev_workspace",
         action_name: "win.prev-workspace",
         default_accel: "<Ctrl>Page_Up",
         label: "Previous Workspace",
@@ -108,6 +166,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::CycleTabPrev,
+        config_key: "cycle_tab_prev",
         action_name: "win.cycle-tab-prev",
         default_accel: "<Ctrl><Shift>Left",
         label: "Previous Tab",
@@ -116,6 +175,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::CycleTabNext,
+        config_key: "cycle_tab_next",
         action_name: "win.cycle-tab-next",
         default_accel: "<Ctrl><Shift>Right",
         label: "Next Tab",
@@ -124,6 +184,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::SplitDown,
+        config_key: "split_down",
         action_name: "win.split-down",
         default_accel: "<Ctrl><Shift>d",
         label: "Split Down",
@@ -132,6 +193,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::NewTerminalInFocusedPane,
+        config_key: "new_terminal_in_focused_pane",
         action_name: "win.new-terminal-in-focused-pane",
         default_accel: "<Ctrl><Shift>t",
         label: "New Terminal In Focused Pane",
@@ -140,6 +202,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::SplitRight,
+        config_key: "split_right",
         action_name: "win.split-right",
         default_accel: "<Ctrl>d",
         label: "Split Right",
@@ -148,6 +211,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::CloseFocusedPane,
+        config_key: "close_focused_pane",
         action_name: "win.close-focused-pane",
         default_accel: "<Ctrl>w",
         label: "Close Focused Pane",
@@ -156,6 +220,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::NewTerminal,
+        config_key: "new_terminal",
         action_name: "win.new-terminal",
         default_accel: "<Ctrl>t",
         label: "New Terminal",
@@ -164,6 +229,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::FocusLeft,
+        config_key: "focus_left",
         action_name: "win.focus-left",
         default_accel: "<Ctrl>Left",
         label: "Focus Left",
@@ -172,6 +238,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::FocusRight,
+        config_key: "focus_right",
         action_name: "win.focus-right",
         default_accel: "<Ctrl>Right",
         label: "Focus Right",
@@ -180,6 +247,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::FocusUp,
+        config_key: "focus_up",
         action_name: "win.focus-up",
         default_accel: "<Ctrl>Up",
         label: "Focus Up",
@@ -188,6 +256,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::FocusDown,
+        config_key: "focus_down",
         action_name: "win.focus-down",
         default_accel: "<Ctrl>Down",
         label: "Focus Down",
@@ -196,6 +265,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::ActivateWorkspace1,
+        config_key: "activate_workspace_1",
         action_name: "win.activate-workspace-1",
         default_accel: "<Ctrl>1",
         label: "Activate Workspace 1",
@@ -204,6 +274,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::ActivateWorkspace2,
+        config_key: "activate_workspace_2",
         action_name: "win.activate-workspace-2",
         default_accel: "<Ctrl>2",
         label: "Activate Workspace 2",
@@ -212,6 +283,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::ActivateWorkspace3,
+        config_key: "activate_workspace_3",
         action_name: "win.activate-workspace-3",
         default_accel: "<Ctrl>3",
         label: "Activate Workspace 3",
@@ -220,6 +292,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::ActivateWorkspace4,
+        config_key: "activate_workspace_4",
         action_name: "win.activate-workspace-4",
         default_accel: "<Ctrl>4",
         label: "Activate Workspace 4",
@@ -228,6 +301,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::ActivateWorkspace5,
+        config_key: "activate_workspace_5",
         action_name: "win.activate-workspace-5",
         default_accel: "<Ctrl>5",
         label: "Activate Workspace 5",
@@ -236,6 +310,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::ActivateWorkspace6,
+        config_key: "activate_workspace_6",
         action_name: "win.activate-workspace-6",
         default_accel: "<Ctrl>6",
         label: "Activate Workspace 6",
@@ -244,6 +319,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::ActivateWorkspace7,
+        config_key: "activate_workspace_7",
         action_name: "win.activate-workspace-7",
         default_accel: "<Ctrl>7",
         label: "Activate Workspace 7",
@@ -252,6 +328,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::ActivateWorkspace8,
+        config_key: "activate_workspace_8",
         action_name: "win.activate-workspace-8",
         default_accel: "<Ctrl>8",
         label: "Activate Workspace 8",
@@ -260,6 +337,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
     ShortcutDefinition {
         id: ShortcutId::ActivateLastWorkspace,
+        config_key: "activate_last_workspace",
         action_name: "win.activate-last-workspace",
         default_accel: "<Ctrl>9",
         label: "Activate Last Workspace",
@@ -268,14 +346,313 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 25] = [
     },
 ];
 
+impl NormalizedShortcut {
+    pub fn parse(input: &str) -> Result<Self, ShortcutConfigError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(ShortcutConfigError::MissingKey {
+                input: input.to_string(),
+            });
+        }
+
+        let mut rest = trimmed;
+        let mut ctrl = false;
+        let mut shift = false;
+        let mut alt = false;
+        let mut meta = false;
+        let mut super_key = false;
+
+        while let Some(stripped) = rest.strip_prefix('<') {
+            let Some(end) = stripped.find('>') else {
+                return Err(ShortcutConfigError::InvalidBindingFormat {
+                    input: input.to_string(),
+                });
+            };
+            let modifier = stripped[..end].trim().to_ascii_lowercase();
+            match modifier.as_str() {
+                "ctrl" | "control" => ctrl = true,
+                "shift" => shift = true,
+                "alt" | "option" => alt = true,
+                "meta" | "cmd" | "command" => meta = true,
+                "super" => super_key = true,
+                _ => {
+                    return Err(ShortcutConfigError::UnknownModifier {
+                        input: input.to_string(),
+                        modifier,
+                    });
+                }
+            }
+            rest = stripped[end + 1..].trim_start();
+        }
+
+        if rest.is_empty() {
+            return Err(ShortcutConfigError::MissingKey {
+                input: input.to_string(),
+            });
+        }
+
+        if rest.contains('<') || rest.contains('>') {
+            return Err(ShortcutConfigError::InvalidBindingFormat {
+                input: input.to_string(),
+            });
+        }
+
+        Ok(Self {
+            key: normalize_runtime_key(rest),
+            ctrl,
+            shift,
+            alt,
+            meta,
+            super_key,
+        })
+    }
+
+    pub fn to_gtk_accel(&self) -> String {
+        let mut accel = String::new();
+        if self.ctrl {
+            accel.push_str("<Ctrl>");
+        }
+        if self.alt {
+            accel.push_str("<Alt>");
+        }
+        if self.meta {
+            accel.push_str("<Meta>");
+        }
+        if self.shift {
+            accel.push_str("<Shift>");
+        }
+        if self.super_key {
+            accel.push_str("<Super>");
+        }
+        accel.push_str(&runtime_key_to_gtk_key(&self.key));
+        accel
+    }
+
+    pub fn to_runtime_combo(&self) -> String {
+        let mut parts = Vec::new();
+        if self.ctrl {
+            parts.push("ctrl");
+        }
+        if self.alt {
+            parts.push("alt");
+        }
+        if self.meta {
+            parts.push("meta");
+        }
+        if self.shift {
+            parts.push("shift");
+        }
+        if self.super_key {
+            parts.push("super");
+        }
+        parts.push(self.key.as_str());
+        parts.join("+")
+    }
+}
+
+impl ResolvedShortcut {
+    pub fn gtk_accel(&self) -> Option<String> {
+        self.binding.as_ref().map(NormalizedShortcut::to_gtk_accel)
+    }
+
+    pub fn runtime_combo(&self) -> Option<String> {
+        self.binding.as_ref().map(NormalizedShortcut::to_runtime_combo)
+    }
+}
+
+impl ResolvedShortcutConfig {
+    pub fn find_by_id(&self, id: ShortcutId) -> Option<&ResolvedShortcut> {
+        self.shortcuts
+            .iter()
+            .find(|shortcut| shortcut.definition.id == id)
+    }
+
+    pub fn find_by_action_name(&self, action_name: &str) -> Option<&ResolvedShortcut> {
+        self.shortcuts
+            .iter()
+            .find(|shortcut| shortcut.definition.action_name == action_name)
+    }
+
+    pub fn find_by_runtime_combo(&self, combo: &str) -> Option<&ResolvedShortcut> {
+        self.shortcuts
+            .iter()
+            .find(|shortcut| shortcut.runtime_combo().as_deref() == Some(combo))
+    }
+}
+
 pub fn definitions() -> &'static [ShortcutDefinition] {
     &SHORTCUT_DEFINITIONS
+}
+
+pub fn config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|base| config_path_in(&base))
+}
+
+pub fn config_path_in(base: &Path) -> PathBuf {
+    base.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME)
+}
+
+pub fn default_shortcuts() -> ResolvedShortcutConfig {
+    ResolvedShortcutConfig {
+        shortcuts: definitions()
+            .iter()
+            .map(|definition| ResolvedShortcut {
+                definition,
+                binding: Some(
+                    NormalizedShortcut::parse(definition.default_accel)
+                        .expect("default shortcuts should be valid"),
+                ),
+            })
+            .collect(),
+        warnings: Vec::new(),
+    }
+}
+
+pub fn resolve_shortcuts_from_str(raw: &str) -> Result<ResolvedShortcutConfig, ShortcutConfigError> {
+    let parsed: ShortcutConfigFile = serde_json::from_str(raw)
+        .map_err(|err| ShortcutConfigError::InvalidJson(err.to_string()))?;
+    resolve_shortcuts_from_file(parsed)
+}
+
+pub fn load_shortcuts_or_default(path: &Path) -> ResolvedShortcutConfig {
+    if !path.exists() {
+        return default_shortcuts();
+    }
+
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            let mut defaults = default_shortcuts();
+            defaults.warnings.push(format!(
+                "failed to read shortcut config `{}`: {err}",
+                path.display()
+            ));
+            return defaults;
+        }
+    };
+
+    match resolve_shortcuts_from_str(&raw) {
+        Ok(config) => config,
+        Err(err) => {
+            let mut defaults = default_shortcuts();
+            defaults.warnings.push(format!(
+                "failed to load shortcut config `{}`: {err:?}",
+                path.display()
+            ));
+            defaults
+        }
+    }
+}
+
+pub fn load_shortcuts() -> ResolvedShortcutConfig {
+    let Some(path) = config_path() else {
+        let mut defaults = default_shortcuts();
+        defaults
+            .warnings
+            .push("config_dir unavailable; using default shortcuts".to_string());
+        return defaults;
+    };
+    load_shortcuts_or_default(&path)
+}
+
+fn resolve_shortcuts_from_file(
+    parsed: ShortcutConfigFile,
+) -> Result<ResolvedShortcutConfig, ShortcutConfigError> {
+    let mut resolved = default_shortcuts();
+
+    for (shortcut_id, value) in parsed.shortcuts {
+        let Some(definition) = definition_by_config_key(&shortcut_id) else {
+            resolved
+                .warnings
+                .push(format!("ignoring unknown shortcut id `{shortcut_id}`"));
+            continue;
+        };
+
+        let binding = match value {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(value) => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(NormalizedShortcut::parse(trimmed)?)
+                }
+            }
+            _ => {
+                return Err(ShortcutConfigError::InvalidBindingType {
+                    shortcut_id: shortcut_id.clone(),
+                });
+            }
+        };
+
+        if let Some(slot) = resolved
+            .shortcuts
+            .iter_mut()
+            .find(|shortcut| shortcut.definition.id == definition.id)
+        {
+            slot.binding = binding;
+        }
+    }
+
+    ensure_unique_active_bindings(&resolved.shortcuts)?;
+    Ok(resolved)
+}
+
+fn ensure_unique_active_bindings(
+    shortcuts: &[ResolvedShortcut],
+) -> Result<(), ShortcutConfigError> {
+    let mut active: HashMap<NormalizedShortcut, ShortcutId> = HashMap::new();
+    for shortcut in shortcuts {
+        let Some(binding) = shortcut.binding.clone() else {
+            continue;
+        };
+        if let Some(existing) = active.insert(binding.clone(), shortcut.definition.id) {
+            return Err(ShortcutConfigError::DuplicateBinding {
+                first: existing,
+                second: shortcut.definition.id,
+                accel: binding.to_gtk_accel(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn definition_by_config_key(config_key: &str) -> Option<&'static ShortcutDefinition> {
+    definitions()
+        .iter()
+        .find(|definition| definition.config_key == config_key)
+}
+
+fn normalize_runtime_key(key: &str) -> String {
+    let normalized = key.trim().replace(['-', ' '], "_").to_ascii_lowercase();
+    match normalized.as_str() {
+        "pageup" => "page_up".to_string(),
+        "pagedown" => "page_down".to_string(),
+        "return" => "enter".to_string(),
+        "esc" => "escape".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn runtime_key_to_gtk_key(key: &str) -> String {
+    match key {
+        "page_up" => "Page_Up".to_string(),
+        "page_down" => "Page_Down".to_string(),
+        "left" => "Left".to_string(),
+        "right" => "Right".to_string(),
+        "up" => "Up".to_string(),
+        "down" => "Down".to_string(),
+        "enter" => "Return".to_string(),
+        "escape" => "Escape".to_string(),
+        "tab" => "Tab".to_string(),
+        other => other.to_string(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
+    use tempfile::tempdir;
 
     #[test]
     fn definitions_cover_current_host_shortcuts() {
@@ -285,18 +662,20 @@ mod tests {
     #[test]
     fn definitions_have_unique_ids_and_action_names_and_accels() {
         let defs = definitions();
-        let ids: HashSet<_> = defs.iter().map(|def| def.id).collect();
-        let actions: HashSet<_> = defs.iter().map(|def| def.action_name).collect();
-        let accels: HashSet<_> = defs.iter().map(|def| def.default_accel).collect();
+        let mut ids = HashMap::new();
+        let mut actions = HashMap::new();
+        let mut accel_keys = HashMap::new();
 
-        assert_eq!(ids.len(), defs.len());
-        assert_eq!(actions.len(), defs.len());
-        assert_eq!(accels.len(), defs.len());
+        for def in defs {
+            assert!(ids.insert(def.id, def.config_key).is_none());
+            assert!(actions.insert(def.action_name, def.config_key).is_none());
+            assert!(accel_keys.insert(def.config_key, def.default_accel).is_none());
+        }
     }
 
     #[test]
     fn definitions_have_expected_gtk_accel_subset() {
-        let gtk_actions: HashSet<_> = definitions()
+        let gtk_actions: Vec<_> = definitions()
             .iter()
             .filter(|def| def.registers_gtk_accel)
             .map(|def| def.action_name)
@@ -304,13 +683,117 @@ mod tests {
 
         assert_eq!(
             gtk_actions,
-            HashSet::from([
+            vec![
                 "win.new-workspace",
                 "win.close-workspace",
                 "win.toggle-sidebar",
                 "win.next-workspace",
                 "win.prev-workspace",
-            ])
+            ]
         );
+    }
+
+    #[test]
+    fn normalized_shortcut_round_trips_between_gtk_and_runtime_forms() {
+        let shortcut = NormalizedShortcut::parse("<Shift><Ctrl>Page_Down").unwrap();
+        assert_eq!(shortcut.to_gtk_accel(), "<Ctrl><Shift>Page_Down");
+        assert_eq!(shortcut.to_runtime_combo(), "ctrl+shift+page_down");
+    }
+
+    #[test]
+    fn config_path_in_uses_limux_config_json() {
+        let base = Path::new("/tmp/example");
+        assert_eq!(
+            config_path_in(base),
+            PathBuf::from("/tmp/example/limux/config.json")
+        );
+    }
+
+    #[test]
+    fn resolve_shortcuts_from_str_applies_custom_bindings_and_unbinds() {
+        let resolved = resolve_shortcuts_from_str(
+            r#"{
+                "shortcuts": {
+                    "toggle_sidebar": "<Ctrl><Alt>b",
+                    "split_right": null,
+                    "new_terminal": ""
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolved
+                .find_by_id(ShortcutId::ToggleSidebar)
+                .and_then(ResolvedShortcut::gtk_accel)
+                .as_deref(),
+            Some("<Ctrl><Alt>b")
+        );
+        assert_eq!(
+            resolved
+                .find_by_id(ShortcutId::SplitRight)
+                .and_then(ResolvedShortcut::gtk_accel),
+            None
+        );
+        assert_eq!(
+            resolved
+                .find_by_id(ShortcutId::NewTerminal)
+                .and_then(ResolvedShortcut::gtk_accel),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_shortcuts_from_str_warns_on_unknown_ids() {
+        let resolved = resolve_shortcuts_from_str(
+            r#"{
+                "shortcuts": {
+                    "toggle_sidebar": "<Ctrl><Alt>b",
+                    "unknown_action": "<Ctrl>x"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(resolved.warnings.len(), 1);
+        assert!(resolved.warnings[0].contains("unknown shortcut id `unknown_action`"));
+    }
+
+    #[test]
+    fn resolve_shortcuts_from_str_rejects_duplicate_active_bindings() {
+        let err = resolve_shortcuts_from_str(
+            r#"{
+                "shortcuts": {
+                    "toggle_sidebar": "<Ctrl><Alt>b",
+                    "split_right": "<Ctrl><Alt>b"
+                }
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ShortcutConfigError::DuplicateBinding { .. }));
+    }
+
+    #[test]
+    fn load_shortcuts_or_default_falls_back_on_invalid_json() {
+        let dir = tempdir().unwrap();
+        let path = config_path_in(dir.path());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "{ this is not json").unwrap();
+
+        let resolved = load_shortcuts_or_default(&path);
+
+        assert_eq!(resolved.shortcuts.len(), definitions().len());
+        assert_eq!(resolved.warnings.len(), 1);
+        assert!(resolved.warnings[0].contains("failed to load shortcut config"));
+    }
+
+    #[test]
+    fn load_shortcuts_or_default_uses_defaults_when_file_is_missing() {
+        let dir = tempdir().unwrap();
+        let path = config_path_in(dir.path());
+        let resolved = load_shortcuts_or_default(&path);
+        assert!(resolved.warnings.is_empty());
+        assert_eq!(resolved.shortcuts.len(), definitions().len());
     }
 }
