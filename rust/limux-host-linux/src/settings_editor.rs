@@ -16,7 +16,7 @@ pub const SETTINGS_CSS: &str = r#"
 }
 "#;
 
-type OnConfigChanged = dyn Fn(&AppConfig);
+type OnConfigChanged = dyn Fn(&AppConfig, &AppConfig);
 
 pub struct SettingsEditorInput {
     pub config: Rc<RefCell<AppConfig>>,
@@ -50,15 +50,17 @@ pub fn present_settings_dialog(parent: &impl IsA<gtk::Widget>, input: SettingsEd
 
 fn apply_config_change<F, G>(config: &Rc<RefCell<AppConfig>>, on_changed: &F, update: G)
 where
-    F: Fn(&AppConfig) + ?Sized,
+    F: Fn(&AppConfig, &AppConfig) + ?Sized,
     G: FnOnce(&mut AppConfig),
 {
-    let updated = {
+    let (previous, updated) = {
         let mut config_ref = config.borrow_mut();
+        let previous = config_ref.clone();
         update(&mut config_ref);
-        config_ref.clone()
+        let updated = config_ref.clone();
+        (previous, updated)
     };
-    on_changed(&updated);
+    on_changed(&previous, &updated);
 }
 
 fn build_settings_window_content(window: &adw::Window, input: SettingsEditorInput) -> gtk::Widget {
@@ -227,7 +229,7 @@ mod tests {
 
         apply_config_change(
             &config,
-            &|updated| {
+            &|_previous, updated| {
                 config.borrow_mut().clone_from(updated);
             },
             |current| {

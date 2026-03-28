@@ -156,7 +156,7 @@ type PaneShortcutCaptureCallback =
     dyn Fn(ShortcutId, Option<NormalizedShortcut>) -> Result<ResolvedShortcutConfig, String>;
 type PaneSplitWithTabCallback = dyn Fn(&gtk::Widget, &gtk::Widget, gtk::Orientation, String, bool);
 type PaneConfigCallback = dyn Fn() -> Rc<RefCell<AppConfig>>;
-type PaneConfigChangedCallback = dyn Fn(&AppConfig);
+type PaneConfigChangedCallback = dyn Fn(&AppConfig, &AppConfig);
 
 pub struct PaneCallbacks {
     pub on_split: Box<PaneSplitCallback>,

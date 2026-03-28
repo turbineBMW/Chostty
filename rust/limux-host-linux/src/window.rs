@@ -111,6 +111,35 @@ const PORTAL_APPEARANCE_NAMESPACE: &str = "org.freedesktop.appearance";
 const PORTAL_COLOR_SCHEME_KEY: &str = "color-scheme";
 const GNOME_INTERFACE_SCHEMA: &str = "org.gnome.desktop.interface";
 const GNOME_COLOR_SCHEME_KEY: &str = "color-scheme";
+const PORTAL_THEME_READ_TIMEOUT_MS: i32 = 500;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PortalColorSchemePreference {
+    #[default]
+    Unknown,
+    Default,
+    Dark,
+    Light,
+}
+
+impl PortalColorSchemePreference {
+    fn from_raw(raw: u32) -> Option<Self> {
+        match raw {
+            0 => Some(Self::Default),
+            1 => Some(Self::Dark),
+            2 => Some(Self::Light),
+            _ => None,
+        }
+    }
+
+    fn resolved(self, gnome_prefers_dark: Option<bool>) -> Option<bool> {
+        match self {
+            Self::Dark => Some(true),
+            Self::Light => Some(false),
+            Self::Default | Self::Unknown => gnome_prefers_dark,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SessionSaveRequest {
@@ -639,10 +668,10 @@ row:selected .limux-ws-path {
 
 pub fn build_window(app: &adw::Application) {
     let display = gtk::gdk::Display::default().expect("display");
-    let portal_settings_proxy = portal_settings_proxy();
     let gnome_interface_settings = gnome_interface_settings();
+    let portal_color_scheme_preference = Rc::new(Cell::new(PortalColorSchemePreference::Unknown));
     let system_prefers_dark = Rc::new(Cell::new(resolve_system_prefers_dark(
-        portal_settings_proxy.as_ref(),
+        portal_color_scheme_preference.get(),
         gnome_interface_settings.as_ref(),
     )));
     let loaded_config = app_config::load();
@@ -875,30 +904,27 @@ pub fn build_window(app: &adw::Application) {
         });
     }
 
-    let theme_portal_signal = portal_settings_proxy.as_ref().and_then(|proxy| {
-        connect_portal_appearance_watch(
-            proxy,
-            gnome_interface_settings.clone(),
-            state.clone(),
-            style_manager.clone(),
-            system_prefers_dark.clone(),
-        )
-    });
     let theme_gnome_signal = gnome_interface_settings.as_ref().map(|settings| {
         connect_gnome_appearance_watch(
             settings,
-            portal_settings_proxy.clone(),
             state.clone(),
             style_manager.clone(),
             system_prefers_dark.clone(),
+            portal_color_scheme_preference.clone(),
         )
     });
     {
         let mut s = state.borrow_mut();
-        s._theme_portal_signal = theme_portal_signal;
         s._theme_gnome_settings = gnome_interface_settings.clone();
         s._theme_gnome_signal = theme_gnome_signal;
     }
+    connect_portal_appearance_watch_async(
+        gnome_interface_settings.clone(),
+        state.clone(),
+        style_manager.clone(),
+        system_prefers_dark.clone(),
+        portal_color_scheme_preference.clone(),
+    );
 
     apply_shortcuts_to_application(app, &state.borrow().shortcuts);
 
@@ -1440,43 +1466,6 @@ fn adw_color_scheme_for(scheme: app_config::ColorScheme) -> adw::ColorScheme {
     }
 }
 
-fn portal_settings_proxy() -> Option<gio::DBusProxy> {
-    gio::DBusProxy::for_bus_sync(
-        gio::BusType::Session,
-        gio::DBusProxyFlags::NONE,
-        None::<&gio::DBusInterfaceInfo>,
-        PORTAL_DESKTOP_SERVICE,
-        PORTAL_DESKTOP_PATH,
-        PORTAL_SETTINGS_INTERFACE,
-        None::<&gio::Cancellable>,
-    )
-    .ok()
-}
-
-fn portal_prefers_dark_from_raw(raw: u32) -> Option<bool> {
-    match raw {
-        1 => Some(true),
-        2 => Some(false),
-        0 => None,
-        _ => None,
-    }
-}
-
-fn portal_prefers_dark(proxy: &gio::DBusProxy) -> Option<bool> {
-    let params = (PORTAL_APPEARANCE_NAMESPACE, PORTAL_COLOR_SCHEME_KEY).to_variant();
-    let response = proxy
-        .call_sync(
-            "Read",
-            Some(&params),
-            gio::DBusCallFlags::NONE,
-            -1,
-            None::<&gio::Cancellable>,
-        )
-        .ok()?;
-    let value = response.try_child_get::<glib::Variant>(0).ok().flatten()?;
-    portal_prefers_dark_from_raw(value.try_get::<u32>().ok()?)
-}
-
 fn gnome_interface_settings() -> Option<gio::Settings> {
     let schema = gio::SettingsSchemaSource::default()?.lookup(GNOME_INTERFACE_SCHEMA, true)?;
     if !schema.has_key(GNOME_COLOR_SCHEME_KEY) {
@@ -1519,15 +1508,32 @@ fn gtk_system_prefers_dark_from_raw(raw: Option<i32>) -> Option<bool> {
 }
 
 fn resolve_system_prefers_dark(
-    portal_settings_proxy: Option<&gio::DBusProxy>,
+    portal_color_scheme_preference: PortalColorSchemePreference,
     gnome_interface_settings: Option<&gio::Settings>,
 ) -> Option<bool> {
-    portal_settings_proxy
-        .and_then(portal_prefers_dark)
-        .or_else(|| gnome_interface_settings.and_then(gnome_prefers_dark))
+    resolved_system_prefers_dark(
+        portal_color_scheme_preference,
+        gnome_interface_settings.and_then(gnome_prefers_dark),
+    )
 }
 
-fn portal_setting_changed_prefers_dark(parameters: &glib::Variant) -> Option<bool> {
+fn resolved_system_prefers_dark(
+    portal_color_scheme_preference: PortalColorSchemePreference,
+    gnome_prefers_dark: Option<bool>,
+) -> Option<bool> {
+    portal_color_scheme_preference.resolved(gnome_prefers_dark)
+}
+
+fn portal_color_scheme_preference_from_response(
+    response: &glib::Variant,
+) -> Option<PortalColorSchemePreference> {
+    let value = response.try_child_get::<glib::Variant>(0).ok().flatten()?;
+    PortalColorSchemePreference::from_raw(value.try_get::<u32>().ok()?)
+}
+
+fn portal_setting_changed_preference(
+    parameters: &glib::Variant,
+) -> Option<PortalColorSchemePreference> {
     let (namespace, key, value) = parameters
         .try_get::<(String, String, glib::Variant)>()
         .ok()?;
@@ -1535,7 +1541,7 @@ fn portal_setting_changed_prefers_dark(parameters: &glib::Variant) -> Option<boo
         return None;
     }
 
-    portal_prefers_dark_from_raw(value.try_get::<u32>().ok()?)
+    PortalColorSchemePreference::from_raw(value.try_get::<u32>().ok()?)
 }
 
 fn sync_system_prefers_dark_change(
@@ -1556,15 +1562,115 @@ fn sync_system_prefers_dark_change(
     );
 }
 
+fn sync_portal_color_scheme_preference_change(
+    state: &State,
+    style_manager: &adw::StyleManager,
+    system_prefers_dark: &Cell<Option<bool>>,
+    portal_color_scheme_preference: &Cell<PortalColorSchemePreference>,
+    gnome_interface_settings: Option<&gio::Settings>,
+    updated_preference: PortalColorSchemePreference,
+) {
+    if updated_preference == portal_color_scheme_preference.get() {
+        return;
+    }
+
+    portal_color_scheme_preference.set(updated_preference);
+    let resolved_preference =
+        resolve_system_prefers_dark(updated_preference, gnome_interface_settings);
+    sync_system_prefers_dark_change(
+        state,
+        style_manager,
+        system_prefers_dark,
+        resolved_preference,
+    );
+}
+
+fn connect_portal_appearance_watch_async(
+    gnome_interface_settings: Option<gio::Settings>,
+    state: State,
+    style_manager: adw::StyleManager,
+    system_prefers_dark: Rc<Cell<Option<bool>>>,
+    portal_color_scheme_preference: Rc<Cell<PortalColorSchemePreference>>,
+) {
+    gio::DBusProxy::for_bus(
+        gio::BusType::Session,
+        gio::DBusProxyFlags::NONE,
+        None::<&gio::DBusInterfaceInfo>,
+        PORTAL_DESKTOP_SERVICE,
+        PORTAL_DESKTOP_PATH,
+        PORTAL_SETTINGS_INTERFACE,
+        None::<&gio::Cancellable>,
+        move |result| {
+            let Ok(proxy) = result else {
+                return;
+            };
+
+            read_portal_appearance_preference_async(
+                &proxy,
+                gnome_interface_settings.clone(),
+                state.clone(),
+                style_manager.clone(),
+                system_prefers_dark.clone(),
+                portal_color_scheme_preference.clone(),
+            );
+
+            let subscription = connect_portal_appearance_watch(
+                &proxy,
+                gnome_interface_settings.clone(),
+                state.clone(),
+                style_manager.clone(),
+                system_prefers_dark.clone(),
+                portal_color_scheme_preference.clone(),
+            );
+            state.borrow_mut()._theme_portal_signal = subscription;
+        },
+    );
+}
+
+fn read_portal_appearance_preference_async(
+    proxy: &gio::DBusProxy,
+    gnome_interface_settings: Option<gio::Settings>,
+    state: State,
+    style_manager: adw::StyleManager,
+    system_prefers_dark: Rc<Cell<Option<bool>>>,
+    portal_color_scheme_preference: Rc<Cell<PortalColorSchemePreference>>,
+) {
+    let params = (PORTAL_APPEARANCE_NAMESPACE, PORTAL_COLOR_SCHEME_KEY).to_variant();
+    proxy.call(
+        "Read",
+        Some(&params),
+        gio::DBusCallFlags::NONE,
+        PORTAL_THEME_READ_TIMEOUT_MS,
+        None::<&gio::Cancellable>,
+        move |result| {
+            let Ok(response) = result else {
+                return;
+            };
+            let Some(updated_preference) = portal_color_scheme_preference_from_response(&response)
+            else {
+                return;
+            };
+            sync_portal_color_scheme_preference_change(
+                &state,
+                &style_manager,
+                system_prefers_dark.as_ref(),
+                portal_color_scheme_preference.as_ref(),
+                gnome_interface_settings.as_ref(),
+                updated_preference,
+            );
+        },
+    );
+}
+
 fn connect_portal_appearance_watch(
     proxy: &gio::DBusProxy,
     gnome_interface_settings: Option<gio::Settings>,
     state: State,
     style_manager: adw::StyleManager,
     system_prefers_dark: Rc<Cell<Option<bool>>>,
+    portal_color_scheme_preference: Rc<Cell<PortalColorSchemePreference>>,
 ) -> Option<gio::SignalSubscription> {
     let connection = proxy.connection();
-    let proxy_for_watch = proxy.clone();
     Some(connection.subscribe_to_signal(
         Some(PORTAL_DESKTOP_SERVICE),
         Some(PORTAL_SETTINGS_INTERFACE),
@@ -1573,19 +1679,17 @@ fn connect_portal_appearance_watch(
         Some(PORTAL_APPEARANCE_NAMESPACE),
         gio::DBusSignalFlags::NONE,
         move |signal| {
-            if portal_setting_changed_prefers_dark(signal.parameters).is_none() {
+            let Some(updated_preference) = portal_setting_changed_preference(signal.parameters)
+            else {
                 return;
-            }
+            };
 
-            let updated_preference = resolve_system_prefers_dark(
-                Some(&proxy_for_watch),
-                gnome_interface_settings.as_ref(),
-            );
-
-            sync_system_prefers_dark_change(
+            sync_portal_color_scheme_preference_change(
                 &state,
                 &style_manager,
                 system_prefers_dark.as_ref(),
+                portal_color_scheme_preference.as_ref(),
+                gnome_interface_settings.as_ref(),
                 updated_preference,
             );
         },
@@ -1594,14 +1698,14 @@ fn connect_portal_appearance_watch(
 
 fn connect_gnome_appearance_watch(
     settings: &gio::Settings,
-    portal_settings_proxy: Option<gio::DBusProxy>,
     state: State,
     style_manager: adw::StyleManager,
     system_prefers_dark: Rc<Cell<Option<bool>>>,
+    portal_color_scheme_preference: Rc<Cell<PortalColorSchemePreference>>,
 ) -> glib::SignalHandlerId {
     settings.connect_changed(Some(GNOME_COLOR_SCHEME_KEY), move |settings, _| {
         let updated_preference =
-            resolve_system_prefers_dark(portal_settings_proxy.as_ref(), Some(settings));
+            resolve_system_prefers_dark(portal_color_scheme_preference.get(), Some(settings));
         sync_system_prefers_dark_change(
             &state,
             &style_manager,
@@ -2738,16 +2842,30 @@ fn create_pane_for_workspace(
             let s = state_for_config.borrow();
             s.config.clone()
         }),
-        on_config_changed: Rc::new(move |updated: &app_config::AppConfig| {
-            let style_manager = adw::StyleManager::default();
-            let system_prefers_dark = {
-                let s = state_for_config_changed.borrow();
-                s.config.borrow_mut().clone_from(updated);
-                s.system_prefers_dark.get()
-            };
-            apply_appearance(&style_manager, system_prefers_dark, &updated.appearance);
-            app_config::save(updated);
-        }),
+        on_config_changed: Rc::new(
+            move |previous: &app_config::AppConfig, updated: &app_config::AppConfig| {
+                let style_manager = adw::StyleManager::default();
+                let system_prefers_dark =
+                    state_for_config_changed.borrow().system_prefers_dark.get();
+                apply_appearance(&style_manager, system_prefers_dark, &updated.appearance);
+                if let Err(err) = app_config::save(updated) {
+                    state_for_config_changed
+                        .borrow()
+                        .config
+                        .borrow_mut()
+                        .clone_from(previous);
+                    apply_appearance(&style_manager, system_prefers_dark, &previous.appearance);
+
+                    let detail = format!("Failed to save Limux settings: {err}");
+                    eprintln!("limux: {detail}");
+                    show_runtime_error(
+                        &state_for_config_changed,
+                        "Failed to save settings",
+                        &detail,
+                    );
+                }
+            },
+        ),
     });
 
     pane::create_pane(
@@ -3611,11 +3729,11 @@ mod tests {
     use super::gtk::gdk;
     use super::{
         clamp_workspace_insert_index_for_pinning, favorites_prefix_len, ghostty_prefers_dark,
-        gtk_system_prefers_dark_from_raw, next_active_workspace_index,
-        portal_prefers_dark_from_raw, queue_session_save_request,
-        shortcut_allowed_while_browser_find_active, shortcut_blocked_by_editable,
-        shortcut_command_from_key_event, shortcut_dispatch_propagation, tab_drag_workspace_seed,
-        workspace_drop_layout_path, workspace_notification_message, EditableCaptureContext,
+        gtk_system_prefers_dark_from_raw, next_active_workspace_index, queue_session_save_request,
+        resolved_system_prefers_dark, shortcut_allowed_while_browser_find_active,
+        shortcut_blocked_by_editable, shortcut_command_from_key_event,
+        shortcut_dispatch_propagation, tab_drag_workspace_seed, workspace_drop_layout_path,
+        workspace_notification_message, EditableCaptureContext, PortalColorSchemePreference,
         SessionSaveAccess, SessionSaveRequest, WorkspaceSeedSource,
     };
     use crate::layout_state::{LayoutNodeState, PaneState, SplitOrientation, SplitState};
@@ -3718,10 +3836,35 @@ mod tests {
     }
 
     #[test]
-    fn portal_prefers_dark_from_raw_treats_default_as_unknown() {
-        assert_eq!(portal_prefers_dark_from_raw(1), Some(true));
-        assert_eq!(portal_prefers_dark_from_raw(2), Some(false));
-        assert_eq!(portal_prefers_dark_from_raw(0), None);
+    fn portal_color_scheme_preference_resolves_with_gnome_fallback() {
+        assert_eq!(
+            PortalColorSchemePreference::from_raw(1),
+            Some(PortalColorSchemePreference::Dark)
+        );
+        assert_eq!(
+            PortalColorSchemePreference::from_raw(2),
+            Some(PortalColorSchemePreference::Light)
+        );
+        assert_eq!(
+            PortalColorSchemePreference::from_raw(0),
+            Some(PortalColorSchemePreference::Default)
+        );
+        assert_eq!(
+            resolved_system_prefers_dark(PortalColorSchemePreference::Dark, Some(false)),
+            Some(true)
+        );
+        assert_eq!(
+            resolved_system_prefers_dark(PortalColorSchemePreference::Light, Some(true)),
+            Some(false)
+        );
+        assert_eq!(
+            resolved_system_prefers_dark(PortalColorSchemePreference::Default, Some(true)),
+            Some(true)
+        );
+        assert_eq!(
+            resolved_system_prefers_dark(PortalColorSchemePreference::Unknown, Some(false)),
+            Some(false)
+        );
     }
 
     #[test]
