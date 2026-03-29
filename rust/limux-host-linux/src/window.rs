@@ -527,10 +527,35 @@ fn attach_split_position_persistence(state: &State, paned: &gtk::Paned) {
 // ---------------------------------------------------------------------------
 
 const CSS: &str = r#"
+@define-color limux_divider_color color-mix(
+    in srgb,
+    @window_fg_color 8%,
+    @window_bg_color
+);
+.limux-window {
+    background-color: transparent;
+}
+.limux-window paned > separator {
+    background-color: @limux_divider_color;
+}
+.limux-sidebar-paned > separator,
+.limux-sidebar-paned > separator:hover,
+.limux-sidebar-paned > separator:backdrop,
+.limux-sidebar-paned > separator:disabled {
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+    outline: none;
+    border: none;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+}
 .limux-sidebar {
     background-color: @window_bg_color;
     color: @window_fg_color;
-    border-right: 1px solid alpha(@window_fg_color, 0.08);
+    border-right: 1px solid @limux_divider_color;
 }
 .limux-sidebar-row-box {
     padding: 8px 6px 8px 3px;
@@ -658,7 +683,7 @@ row:selected .limux-ws-path {
     color: alpha(@window_fg_color, 0.5);
 }
 .limux-content {
-    background-color: @window_bg_color;
+    background-color: transparent;
 }
 "#;
 
@@ -738,6 +763,7 @@ pub fn build_window(app: &adw::Application) {
         .default_width(1400)
         .default_height(900)
         .build();
+    window.add_css_class("limux-window");
 
     // On Wayland compositors with xdg-decoration support, the compositor
     // already provides the window chrome, so keep Limux from rendering a
@@ -859,6 +885,7 @@ pub fn build_window(app: &adw::Application) {
         .start_child(&sidebar)
         .end_child(&stack)
         .build();
+    main_paned.add_css_class("limux-sidebar-paned");
 
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
     if let Some(ref header) = header {

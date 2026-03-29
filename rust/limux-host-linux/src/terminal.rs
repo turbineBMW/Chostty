@@ -614,6 +614,7 @@ pub fn create_terminal(
     callbacks: TerminalCallbacks,
 ) -> TerminalWidget {
     let gl_area = gtk::GLArea::new();
+    gl_area.add_css_class("limux-terminal-glarea");
     gl_area.set_hexpand(true);
     gl_area.set_vexpand(true);
     // auto_render=true ensures GTK continuously redraws the GLArea,
@@ -633,6 +634,7 @@ pub fn create_terminal(
 
     // Create overlay early so closures can capture it for toast notifications
     let overlay = gtk::Overlay::new();
+    overlay.add_css_class("limux-terminal-surface");
     overlay.set_child(Some(&gl_area));
     overlay.set_hexpand(true);
     overlay.set_vexpand(true);

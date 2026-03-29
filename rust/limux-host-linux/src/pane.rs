@@ -250,9 +250,23 @@ pub const PANE_CSS: &str = r#"
 .limux-pane-header {
     background-color: @window_bg_color;
     color: @window_fg_color;
-    border-bottom: 1px solid alpha(@window_fg_color, 0.08);
+    border-bottom: 1px solid @limux_divider_color;
+    box-shadow: none;
     min-height: 40px;
     padding: 4px 6px;
+}
+.limux-pane-content {
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    outline: none;
+}
+.limux-terminal-surface,
+.limux-terminal-glarea {
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    outline: none;
 }
 .limux-tab {
     background: transparent;
@@ -369,6 +383,13 @@ pub const PANE_CSS: &str = r#"
 .limux-drop-preview-center {
     background: alpha(@accent_bg_color, 0.14);
 }
+.limux-browser {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+    border: none;
+    box-shadow: none;
+    outline: none;
+}
 "#;
 
 // ---------------------------------------------------------------------------
@@ -418,10 +439,12 @@ pub fn create_pane(
     content_stack.set_transition_type(gtk::StackTransitionType::None);
     content_stack.set_hexpand(true);
     content_stack.set_vexpand(true);
+    content_stack.add_css_class("limux-pane-content");
 
     let content_overlay = gtk::Overlay::new();
     content_overlay.set_hexpand(true);
     content_overlay.set_vexpand(true);
+    content_overlay.add_css_class("limux-pane-content");
     content_overlay.set_child(Some(&content_stack));
 
     let content_drop_overlay = gtk::Box::new(gtk::Orientation::Horizontal, 0);
