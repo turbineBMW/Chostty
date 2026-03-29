@@ -245,35 +245,36 @@ pub const PANE_CSS: &str = r#"
 .limux-pane-header {
     background-color: rgba(30, 30, 30, 1);
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    min-height: 30px;
-    padding: 0 2px;
+    min-height: 38px;
+    padding: 2px 6px;
 }
 .limux-tab {
-    background: none;
+    background: rgba(255, 255, 255, 0.02);
     border: none;
-    border-radius: 4px 4px 0 0;
-    padding: 4px 4px 4px 10px;
-    color: rgba(255, 255, 255, 0.45);
+    border-radius: 999px;
+    padding: 6px 8px 6px 12px;
+    color: rgba(255, 255, 255, 0.6);
     min-height: 0;
     font-size: 12px;
+    margin: 4px 3px;
 }
 .limux-tab:hover {
-    color: rgba(255, 255, 255, 0.7);
-    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.82);
+    background: rgba(255, 255, 255, 0.07);
 }
 .limux-tab-active {
     color: white;
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.12);
 }
 .limux-tab-close {
     background: none;
     border: none;
-    border-radius: 3px;
-    padding: 1px;
+    border-radius: 999px;
+    padding: 2px;
     min-height: 0;
     min-width: 0;
-    color: rgba(255, 255, 255, 0.25);
-    margin-left: 4px;
+    color: rgba(255, 255, 255, 0.45);
+    margin-left: 6px;
 }
 .limux-tab-close:hover {
     color: rgba(255, 255, 255, 0.8);
@@ -1349,9 +1350,12 @@ pub fn focused_shortcut_target(pane_widget: &gtk::Widget) -> FocusedShortcutTarg
 }
 
 fn apply_pin_visuals(tab_button: &gtk::Box, pinned: bool) {
-    if let Some(close_widget) = tab_button.last_child() {
-        close_widget.set_visible(!pinned);
+    if pinned {
+        tab_button.add_css_class("limux-tab-pinned");
+    } else {
+        tab_button.remove_css_class("limux-tab-pinned");
     }
+    sync_tab_close_visibility(tab_button);
     if let Some(inner_box) = tab_button
         .first_child()
         .and_then(|child| child.downcast::<gtk::Box>().ok())
@@ -1370,12 +1374,22 @@ fn apply_pin_visuals(tab_button: &gtk::Box, pinned: bool) {
 // Tab button (label + close)
 // ---------------------------------------------------------------------------
 
+fn sync_tab_close_visibility(tab_button: &gtk::Box) {
+    let show_close = tab_button.has_css_class("limux-tab-hover")
+        && !tab_button.has_css_class("limux-tab-pinned");
+    if let Some(close_widget) = tab_button.last_child() {
+        close_widget.set_visible(show_close);
+    }
+}
+
 fn new_tab_title_label(title: &str) -> gtk::Label {
     let label = gtk::Label::builder()
         .label(title)
         .ellipsize(gtk::pango::EllipsizeMode::End)
-        .max_width_chars(20)
+        .max_width_chars(28)
+        .xalign(0.0)
         .build();
+    label.set_hexpand(true);
     label.set_can_target(false);
     label
 }
@@ -1412,16 +1426,37 @@ fn build_tab_button_from_label(
         .has_frame(false)
         .build();
     close_btn.add_css_class("limux-tab-close");
+    close_btn.set_visible(false);
 
     let inner_box = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     inner_box.set_can_target(false);
+    inner_box.set_hexpand(true);
     inner_box.append(&pin_icon);
     inner_box.append(label);
 
     let tab_btn = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     tab_btn.add_css_class("limux-tab");
+    tab_btn.set_hexpand(true);
+    tab_btn.set_halign(gtk::Align::Fill);
     tab_btn.append(&inner_box);
     tab_btn.append(&close_btn);
+
+    let hover = gtk::EventControllerMotion::new();
+    {
+        let tab_btn = tab_btn.clone();
+        hover.connect_enter(move |_, _, _| {
+            tab_btn.add_css_class("limux-tab-hover");
+            sync_tab_close_visibility(&tab_btn);
+        });
+    }
+    {
+        let tab_btn = tab_btn.clone();
+        hover.connect_leave(move |_| {
+            tab_btn.remove_css_class("limux-tab-hover");
+            sync_tab_close_visibility(&tab_btn);
+        });
+    }
+    tab_btn.add_controller(hover);
 
     let click = gtk::GestureClick::new();
     click.set_button(1);
