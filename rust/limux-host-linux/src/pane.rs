@@ -251,35 +251,48 @@ pub const PANE_CSS: &str = r#"
     background-color: @window_bg_color;
     color: @window_fg_color;
     border-bottom: 1px solid alpha(@window_fg_color, 0.08);
-    min-height: 30px;
-    padding: 0 2px;
+    min-height: 40px;
+    padding: 4px 6px;
 }
 .limux-tab {
-    background: none;
+    background: transparent;
     border: none;
-    border-radius: 4px 4px 0 0;
-    padding: 4px 4px 4px 10px;
-    color: alpha(@window_fg_color, 0.5);
+    border-radius: 0;
+    padding: 8px 10px 8px 14px;
+    color: alpha(@window_fg_color, 0.56);
     min-height: 0;
     font-size: 12px;
+    margin: 3px 0;
 }
-.limux-tab:hover {
-    color: alpha(@window_fg_color, 0.72);
-    background: alpha(@window_fg_color, 0.04);
+.limux-tab-separator {
+    border-right: 2px solid alpha(@window_fg_color, 0.08);
+}
+.limux-tab:hover,
+.limux-tab-hover {
+    color: alpha(@window_fg_color, 0.84);
+    background: alpha(@window_fg_color, 0.075);
+    border-radius: 10px;
+    border-right-color: transparent;
+    box-shadow: inset 0 0 0 1px alpha(@window_fg_color, 0.035);
 }
 .limux-tab-active {
     color: @window_fg_color;
-    background: alpha(@window_fg_color, 0.08);
+    background: alpha(@window_fg_color, 0.115);
+    border-radius: 10px;
+    border-right-color: transparent;
+    box-shadow:
+        inset 0 1px 0 alpha(@window_fg_color, 0.045),
+        inset 0 0 0 1px alpha(@window_fg_color, 0.03);
 }
 .limux-tab-close {
     background: none;
     border: none;
-    border-radius: 3px;
-    padding: 1px;
+    border-radius: 999px;
+    padding: 2px;
     min-height: 0;
     min-width: 0;
-    color: alpha(@window_fg_color, 0.28);
-    margin-left: 4px;
+    color: alpha(@window_fg_color, 0.45);
+    margin-left: 8px;
 }
 .limux-tab-close:hover {
     color: alpha(@window_fg_color, 0.8);
@@ -1002,6 +1015,7 @@ fn add_terminal_tab_inner(
             .expect("terminal tab inserted")
             .tab_button,
     );
+    sync_tab_separator_classes(&internals.tab_state);
 
     if let Some(custom_name) = options.as_ref().and_then(|value| value.custom_name) {
         title_label.set_label(custom_name);
@@ -1079,6 +1093,7 @@ fn add_browser_tab_inner(internals: &Rc<PaneInternals>, options: Option<BrowserT
             .expect("browser tab inserted")
             .tab_button,
     );
+    sync_tab_separator_classes(&internals.tab_state);
 
     if let Some(custom_name) = options.as_ref().and_then(|value| value.custom_name) {
         title_label.set_label(custom_name);
@@ -1147,6 +1162,7 @@ fn add_keybind_editor_tab_inner(internals: &Rc<PaneInternals>, input: KeybindsTa
             .expect("keybinds tab inserted")
             .tab_button,
     );
+    sync_tab_separator_classes(&internals.tab_state);
 
     if let Some(custom_name) = input.options.as_ref().and_then(|value| value.custom_name) {
         title_label.set_label(custom_name);
@@ -1383,9 +1399,12 @@ pub fn focused_shortcut_target(pane_widget: &gtk::Widget) -> FocusedShortcutTarg
 }
 
 fn apply_pin_visuals(tab_button: &gtk::Box, pinned: bool) {
-    if let Some(close_widget) = tab_button.last_child() {
-        close_widget.set_visible(!pinned);
+    if pinned {
+        tab_button.add_css_class("limux-tab-pinned");
+    } else {
+        tab_button.remove_css_class("limux-tab-pinned");
     }
+    sync_tab_close_visibility(tab_button);
     if let Some(inner_box) = tab_button
         .first_child()
         .and_then(|child| child.downcast::<gtk::Box>().ok())
@@ -1404,12 +1423,26 @@ fn apply_pin_visuals(tab_button: &gtk::Box, pinned: bool) {
 // Tab button (label + close)
 // ---------------------------------------------------------------------------
 
+fn sync_tab_close_visibility(tab_button: &gtk::Box) {
+    let pinned = tab_button.has_css_class("limux-tab-pinned");
+    let show_close = (tab_button.has_css_class("limux-tab-hover")
+        || tab_button.has_css_class("limux-tab-active"))
+        && !pinned;
+    if let Some(close_widget) = tab_button.last_child() {
+        close_widget.set_visible(!pinned);
+        close_widget.set_opacity(if show_close { 1.0 } else { 0.0 });
+        close_widget.set_sensitive(show_close);
+    }
+}
+
 fn new_tab_title_label(title: &str) -> gtk::Label {
     let label = gtk::Label::builder()
         .label(title)
         .ellipsize(gtk::pango::EllipsizeMode::End)
-        .max_width_chars(20)
+        .max_width_chars(28)
+        .xalign(0.0)
         .build();
+    label.set_hexpand(true);
     label.set_can_target(false);
     label
 }
@@ -1446,16 +1479,39 @@ fn build_tab_button_from_label(
         .has_frame(false)
         .build();
     close_btn.add_css_class("limux-tab-close");
+    close_btn.set_visible(true);
+    close_btn.set_opacity(0.0);
+    close_btn.set_sensitive(false);
 
     let inner_box = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     inner_box.set_can_target(false);
+    inner_box.set_hexpand(true);
     inner_box.append(&pin_icon);
     inner_box.append(label);
 
     let tab_btn = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     tab_btn.add_css_class("limux-tab");
+    tab_btn.set_hexpand(true);
+    tab_btn.set_halign(gtk::Align::Fill);
     tab_btn.append(&inner_box);
     tab_btn.append(&close_btn);
+
+    let hover = gtk::EventControllerMotion::new();
+    {
+        let tab_btn = tab_btn.clone();
+        hover.connect_enter(move |_, _, _| {
+            tab_btn.add_css_class("limux-tab-hover");
+            sync_tab_close_visibility(&tab_btn);
+        });
+    }
+    {
+        let tab_btn = tab_btn.clone();
+        hover.connect_leave(move |_| {
+            tab_btn.remove_css_class("limux-tab-hover");
+            sync_tab_close_visibility(&tab_btn);
+        });
+    }
+    tab_btn.add_controller(hover);
 
     let click = gtk::GestureClick::new();
     click.set_button(1);
@@ -1906,6 +1962,24 @@ fn rebuild_tab_strip(tab_strip: &gtk::Box, tab_state: &Rc<RefCell<TabState>>) {
     for button in &buttons {
         tab_strip.append(button);
     }
+    sync_tab_separator_classes(tab_state);
+}
+
+fn sync_tab_separator_classes(tab_state: &Rc<RefCell<TabState>>) {
+    let state = tab_state.borrow();
+    let last_idx = state.tabs.len().saturating_sub(1);
+    let active_idx = state
+        .active_tab
+        .as_deref()
+        .and_then(|active_id| state.tabs.iter().position(|entry| entry.id == active_id));
+    for (idx, entry) in state.tabs.iter().enumerate() {
+        let next_is_active = active_idx == Some(idx + 1);
+        if idx < last_idx && !next_is_active {
+            entry.tab_button.add_css_class("limux-tab-separator");
+        } else {
+            entry.tab_button.remove_css_class("limux-tab-separator");
+        }
+    }
 }
 
 fn rebind_moved_tab_entry(entry: &mut TabEntry, target: &Rc<PaneInternals>) {
@@ -2234,7 +2308,10 @@ fn activate_tab(
         } else {
             entry.tab_button.remove_css_class("limux-tab-active");
         }
+        sync_tab_close_visibility(&entry.tab_button);
     }
+    drop(ts);
+    sync_tab_separator_classes(tab_state);
 
     if content_stack.child_by_name(tab_id).is_some() {
         content_stack.set_visible_child_name(tab_id);
@@ -2242,6 +2319,7 @@ fn activate_tab(
 
     // Focus the content — only grab focus on directly focusable widgets (terminals).
     // For containers (browser vbox), focus the first focusable child instead.
+    let ts = tab_state.borrow();
     if let Some(entry) = ts.tabs.iter().find(|e| e.id == tab_id) {
         let content = entry.content.clone();
         drop(ts);
@@ -2283,6 +2361,7 @@ fn remove_tab(
     let new_id = ts.tabs[new_idx].id.clone();
     let was_active = ts.active_tab.as_deref() == Some(tab_id);
     drop(ts);
+    sync_tab_separator_classes(tab_state);
 
     if was_active {
         activate_tab(tab_strip, content_stack, tab_state, &new_id);
