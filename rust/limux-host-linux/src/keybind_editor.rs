@@ -72,6 +72,7 @@ pub const KEYBIND_EDITOR_CSS: &str = r#"
 #[derive(Clone)]
 struct RowWidgets {
     id: ShortcutId,
+    row: gtk::Box,
     binding_button: gtk::Button,
     hint_label: gtk::Label,
     error_label: gtk::Label,
@@ -86,6 +87,7 @@ pub fn build_keybind_editor(
     let state = Rc::new(RefCell::new(shortcuts.clone()));
     let listening = Rc::new(RefCell::new(None::<ShortcutId>));
     let errors = Rc::new(RefCell::new(HashMap::<ShortcutId, String>::new()));
+    let filter_query = Rc::new(RefCell::new(String::new()));
     let rows = Rc::new(RefCell::new(Vec::<RowWidgets>::new()));
 
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -115,6 +117,20 @@ pub fn build_keybind_editor(
         .xalign(0.0)
         .build();
     hint.add_css_class("limux-keybind-hint");
+
+    let search_entry = gtk::SearchEntry::builder()
+        .placeholder_text("Search keybindings")
+        .hexpand(true)
+        .build();
+    search_entry.set_margin_bottom(10);
+
+    let no_results_label = gtk::Label::builder()
+        .label("No keybindings match that search.")
+        .xalign(0.0)
+        .visible(false)
+        .build();
+    no_results_label.add_css_class("dim-label");
+    no_results_label.set_margin_bottom(10);
 
     let rows_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
@@ -186,6 +202,7 @@ pub fn build_keybind_editor(
 
         rows.borrow_mut().push(RowWidgets {
             id: definition.id,
+            row: row.clone(),
             binding_button: binding_button.clone(),
             hint_label: hint_label.clone(),
             error_label: error_label.clone(),
@@ -196,6 +213,8 @@ pub fn build_keybind_editor(
             let errors = errors.clone();
             let rows = rows.clone();
             let state = state.clone();
+            let filter_query = filter_query.clone();
+            let no_results_label = no_results_label.clone();
             let outer = outer.clone();
             binding_button.connect_clicked(move |button| {
                 *listening.borrow_mut() = Some(shortcut_id);
@@ -206,6 +225,8 @@ pub fn build_keybind_editor(
                     &state.borrow(),
                     *listening.borrow(),
                     &errors.borrow(),
+                    filter_query.borrow().as_str(),
+                    &no_results_label,
                 );
                 button.grab_focus();
             });
@@ -217,6 +238,8 @@ pub fn build_keybind_editor(
         let errors = errors.clone();
         let rows = rows.clone();
         let state = state.clone();
+        let filter_query = filter_query.clone();
+        let no_results_label = no_results_label.clone();
         let on_capture = on_capture.clone();
         let outer_for_controller = outer.clone();
         let key_controller = gtk::EventControllerKey::new();
@@ -273,13 +296,43 @@ pub fn build_keybind_editor(
                 &state.borrow(),
                 *listening.borrow(),
                 &errors.borrow(),
+                filter_query.borrow().as_str(),
+                &no_results_label,
             );
             gtk::glib::Propagation::Stop
         });
         outer.add_controller(key_controller);
     }
 
-    refresh_rows(&rows.borrow(), shortcuts, None, &HashMap::new());
+    {
+        let filter_query = filter_query.clone();
+        let rows = rows.clone();
+        let state = state.clone();
+        let listening = listening.clone();
+        let errors = errors.clone();
+        let no_results_label = no_results_label.clone();
+        search_entry.connect_search_changed(move |entry| {
+            let query = entry.text().to_string();
+            *filter_query.borrow_mut() = query;
+            refresh_rows(
+                &rows.borrow(),
+                &state.borrow(),
+                *listening.borrow(),
+                &errors.borrow(),
+                filter_query.borrow().as_str(),
+                &no_results_label,
+            );
+        });
+    }
+
+    refresh_rows(
+        &rows.borrow(),
+        shortcuts,
+        None,
+        &HashMap::new(),
+        "",
+        &no_results_label,
+    );
 
     let scroller = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -292,6 +345,8 @@ pub fn build_keybind_editor(
 
     outer.append(&header);
     outer.append(&hint);
+    outer.append(&search_entry);
+    outer.append(&no_results_label);
     outer.append(&scroller);
     outer.upcast()
 }
@@ -323,9 +378,18 @@ fn refresh_rows(
     shortcuts: &ResolvedShortcutConfig,
     listening: Option<ShortcutId>,
     errors: &HashMap<ShortcutId, String>,
+    filter_query: &str,
+    no_results_label: &gtk::Label,
 ) {
+    let mut visible_count = 0;
+
     for row in rows {
         let is_listening = listening == Some(row.id);
+        let is_visible = shortcut_matches_filter(shortcuts, row.id, filter_query);
+        row.row.set_visible(is_visible);
+        if is_visible {
+            visible_count += 1;
+        }
         row.binding_button
             .set_label(&binding_button_label(shortcuts, row.id, is_listening));
         row.hint_label.set_visible(is_listening);
@@ -344,6 +408,45 @@ fn refresh_rows(
             row.error_label.set_visible(false);
         }
     }
+
+    no_results_label.set_visible(visible_count == 0);
+}
+
+fn shortcut_matches_filter(
+    shortcuts: &ResolvedShortcutConfig,
+    id: ShortcutId,
+    filter_query: &str,
+) -> bool {
+    let query = filter_query.trim();
+    if query.is_empty() {
+        return true;
+    }
+
+    let query = query.to_ascii_lowercase();
+    let Some(definition) = shortcut_config::definitions()
+        .iter()
+        .find(|definition| definition.id == id)
+    else {
+        return false;
+    };
+
+    let current_label = shortcuts
+        .display_label_for_id(id)
+        .unwrap_or_else(|| "Unbound".to_string());
+    let default_label = shortcuts
+        .default_display_label_for_id(id)
+        .unwrap_or_else(|| definition.default_display_label());
+    let candidates = [
+        definition.label.to_string(),
+        definition.config_key.to_string(),
+        definition.action_basename().to_string(),
+        current_label,
+        default_label,
+    ];
+
+    candidates
+        .iter()
+        .any(|candidate| candidate.to_ascii_lowercase().contains(&query))
 }
 
 #[cfg(test)]
@@ -410,8 +513,8 @@ fn validation_error_message(err: &ShortcutConfigError) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        binding_button_label, capture_outcome_for_key_event, validation_error_message,
-        CaptureOutcome,
+        binding_button_label, capture_outcome_for_key_event, shortcut_matches_filter,
+        validation_error_message, CaptureOutcome,
     };
     use crate::shortcut_config::{
         default_shortcuts, resolve_shortcuts_from_str, ShortcutConfigError, ShortcutId,
@@ -442,6 +545,50 @@ mod tests {
             binding_button_label(&remapped, ShortcutId::SplitRight, false),
             "Ctrl+Alt+H"
         );
+    }
+
+    #[test]
+    fn shortcut_matches_filter_checks_label_and_binding_text() {
+        let defaults = default_shortcuts();
+        assert!(shortcut_matches_filter(
+            &defaults,
+            ShortcutId::SplitRight,
+            "split"
+        ));
+        assert!(shortcut_matches_filter(
+            &defaults,
+            ShortcutId::SplitRight,
+            "ctrl+d"
+        ));
+        assert!(shortcut_matches_filter(
+            &defaults,
+            ShortcutId::SplitRight,
+            "split_right"
+        ));
+
+        let remapped = resolve_shortcuts_from_str(
+            r#"{
+                "shortcuts": {
+                    "split_right": "<Ctrl><Alt>h"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(shortcut_matches_filter(
+            &remapped,
+            ShortcutId::SplitRight,
+            "alt+h"
+        ));
+        assert!(shortcut_matches_filter(
+            &remapped,
+            ShortcutId::SplitRight,
+            "ctrl+d"
+        ));
+        assert!(!shortcut_matches_filter(
+            &remapped,
+            ShortcutId::SplitRight,
+            "workspace rename"
+        ));
     }
 
     #[test]
