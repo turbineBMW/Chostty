@@ -1,8 +1,4 @@
-//! PaneWidget: a tabbed container with action icons in the tab bar.
-//!
-//! Layout: [tab1 x] [tab2 x] ... ←spacer→ [terminal] [browser] [split-h] [split-v] [close]
-//!
-//! All on one line. Tabs left-justified, icons right-justified.
+//! PaneWidget: a tabbed container for terminal, browser, and editor tabs.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -18,7 +14,6 @@ use webkit6::prelude::*;
 use crate::app_config::AppConfig;
 use crate::keybind_editor;
 use crate::layout_state::{PaneState, TabContentState, TabState as SavedTabState};
-use crate::settings_editor;
 use crate::shortcut_config::{NormalizedShortcut, ResolvedShortcutConfig, ShortcutId};
 use crate::terminal::{self, TerminalCallbacks};
 
@@ -151,27 +146,26 @@ type PaneSignalCallback = dyn Fn();
 type PanePathCallback = dyn Fn(&str);
 type PaneDesktopNotificationCallback = dyn Fn(&str, &str);
 type PaneEmptyCallback = dyn Fn(&gtk::Widget, PaneEmptyReason);
+type PaneConfirmLastTabCloseCallback = dyn Fn(&gtk::Widget, PaneEmptyReason, Rc<dyn Fn(bool)>);
 type PaneShortcutStateCallback = dyn Fn() -> Rc<ResolvedShortcutConfig>;
 type PaneShortcutCaptureCallback =
     dyn Fn(ShortcutId, Option<NormalizedShortcut>) -> Result<ResolvedShortcutConfig, String>;
 type PaneSplitWithTabCallback = dyn Fn(&gtk::Widget, &gtk::Widget, gtk::Orientation, String, bool);
 type PaneConfigCallback = dyn Fn() -> Rc<RefCell<AppConfig>>;
-type PaneConfigChangedCallback = dyn Fn(&AppConfig, &AppConfig);
 
 pub struct PaneCallbacks {
     pub on_split: Box<PaneSplitCallback>,
-    pub on_close_pane: Box<PaneWidgetCallback>,
     pub on_bell: Box<PaneSignalCallback>,
     pub on_desktop_notification: Box<PaneDesktopNotificationCallback>,
     pub on_open_keybinds: Box<PaneWidgetCallback>,
     pub current_shortcuts: Box<PaneShortcutStateCallback>,
     pub on_capture_shortcut: Rc<PaneShortcutCaptureCallback>,
     pub on_pwd_changed: Box<PanePathCallback>,
+    pub on_confirm_last_tab_close: Box<PaneConfirmLastTabCloseCallback>,
     pub on_empty: Box<PaneEmptyCallback>,
     pub on_state_changed: Box<PaneSignalCallback>,
     pub on_split_with_tab: Box<PaneSplitWithTabCallback>,
     pub current_config: Box<PaneConfigCallback>,
-    pub on_config_changed: Rc<PaneConfigChangedCallback>,
 }
 
 #[derive(Clone)]
@@ -325,35 +319,6 @@ pub const PANE_CSS: &str = r#"
     background: alpha(@window_fg_color, 0.08);
     color: alpha(@window_fg_color, 0.8);
 }
-.limux-split-icon {
-    border: 1px solid alpha(@window_fg_color, 0.4);
-    border-radius: 2px;
-    min-width: 16px;
-    min-height: 12px;
-    padding: 0;
-}
-.limux-split-icon:hover {
-    border-color: alpha(@window_fg_color, 0.8);
-}
-.limux-split-half-v {
-    min-width: 6px;
-    min-height: 10px;
-}
-.limux-split-half-h {
-    min-width: 14px;
-    min-height: 4px;
-}
-.limux-split-btn {
-    background: none;
-    border: none;
-    border-radius: 4px;
-    padding: 4px 5px;
-    min-height: 0;
-    min-width: 0;
-}
-.limux-split-btn:hover {
-    background: alpha(@window_fg_color, 0.08);
-}
 .limux-pin-icon {
     font-size: 9px;
     margin-right: 2px;
@@ -398,7 +363,7 @@ pub const PANE_CSS: &str = r#"
 
 pub fn create_pane(
     callbacks: Rc<PaneCallbacks>,
-    shortcuts: Rc<ResolvedShortcutConfig>,
+    _shortcuts: Rc<ResolvedShortcutConfig>,
     working_directory: Option<&str>,
     initial_state: Option<&PaneState>,
     skip_default_tab: bool,
@@ -409,7 +374,7 @@ pub fn create_pane(
         .vexpand(true)
         .build();
 
-    // The single header line: tabs (left) + action icons (right)
+    // The header only renders tabs; workspace and pane actions live in the sidebar menu.
     let header = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(0)
@@ -454,47 +419,7 @@ pub fn create_pane(
     content_drop_overlay.set_can_target(false);
     content_overlay.add_overlay(&content_drop_overlay);
 
-    // Action icons (right side)
-    let actions = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(1)
-        .build();
-
-    let new_term_btn = icon_button(
-        "utilities-terminal-symbolic",
-        &pane_action_tooltip(
-            &shortcuts,
-            "New terminal tab",
-            Some(ShortcutId::NewTerminal),
-        ),
-    );
-    let new_browser_btn = icon_button(
-        "limux-globe-symbolic",
-        &pane_action_tooltip(&shortcuts, "New browser tab", None),
-    );
-    let split_h_btn = icon_button(
-        "limux-split-horizontal-symbolic",
-        &pane_action_tooltip(&shortcuts, "Split right", Some(ShortcutId::SplitRight)),
-    );
-    let split_v_btn = icon_button(
-        "limux-split-vertical-symbolic",
-        &pane_action_tooltip(&shortcuts, "Split down", Some(ShortcutId::SplitDown)),
-    );
-    let settings_btn = icon_button("emblem-system-symbolic", "Settings");
-    let close_btn = icon_button(
-        "window-close-symbolic",
-        &pane_action_tooltip(&shortcuts, "Close pane", Some(ShortcutId::CloseFocusedPane)),
-    );
-
-    actions.append(&new_term_btn);
-    actions.append(&new_browser_btn);
-    actions.append(&split_h_btn);
-    actions.append(&split_v_btn);
-    actions.append(&settings_btn);
-    actions.append(&close_btn);
-
     header.append(&tab_overlay);
-    header.append(&actions);
 
     outer.append(&header);
     outer.append(&content_overlay);
@@ -519,66 +444,12 @@ pub fn create_pane(
         callbacks: callbacks.clone(),
         working_directory: ws_wd.clone(),
         workspace_dragging: workspace_dragging.clone(),
-        new_terminal_button: new_term_btn.clone(),
-        split_right_button: split_h_btn.clone(),
-        split_down_button: split_v_btn.clone(),
-        close_pane_button: close_btn.clone(),
     });
 
     if let Some(saved_state) = initial_state {
         restore_tabs_from_state(&internals, working_directory, saved_state);
     } else if !skip_default_tab {
         add_terminal_tab_inner(&internals, working_directory, None);
-    }
-
-    {
-        let internals = internals.clone();
-        let wd = ws_wd.clone();
-        new_term_btn.connect_clicked(move |_| {
-            let dir = wd.borrow().clone();
-            add_terminal_tab_inner(&internals, dir.as_deref(), None);
-        });
-    }
-    {
-        let internals = internals.clone();
-        new_browser_btn.connect_clicked(move |_| {
-            add_browser_tab_inner(&internals, None);
-        });
-    }
-    {
-        let pw = outer.clone();
-        let cb = callbacks.clone();
-        split_h_btn.connect_clicked(move |_| {
-            (cb.on_split)(&pw.clone().upcast(), gtk::Orientation::Horizontal);
-        });
-    }
-    {
-        let pw = outer.clone();
-        let cb = callbacks.clone();
-        split_v_btn.connect_clicked(move |_| {
-            (cb.on_split)(&pw.clone().upcast(), gtk::Orientation::Vertical);
-        });
-    }
-    {
-        let pw = outer.clone();
-        let cb = callbacks.clone();
-        close_btn.connect_clicked(move |_| {
-            (cb.on_close_pane)(&pw.clone().upcast());
-        });
-    }
-    {
-        let internals = internals.clone();
-        settings_btn.connect_clicked(move |_| {
-            settings_editor::present_settings_dialog(
-                &internals.pane_outer,
-                settings_editor::SettingsEditorInput {
-                    config: (internals.callbacks.current_config)(),
-                    shortcuts: (internals.callbacks.current_shortcuts)(),
-                    on_capture: internals.callbacks.on_capture_shortcut.clone(),
-                    on_config_changed: internals.callbacks.on_config_changed.clone(),
-                },
-            );
-        });
     }
 
     install_tab_strip_drop_target(&tab_overlay, &internals);
@@ -632,6 +503,27 @@ pub fn cycle_tab_in_pane(pane_widget: &gtk::Widget, delta: i32) {
         &new_id,
     );
     (internals.callbacks.on_state_changed)();
+}
+
+pub fn close_active_tab_in_pane(pane_widget: &gtk::Widget) -> bool {
+    let Some(internals) = find_pane_internals(pane_widget) else {
+        return false;
+    };
+
+    let target_tab_id = {
+        let tab_state = internals.tab_state.borrow();
+        tab_state
+            .active_tab
+            .clone()
+            .or_else(|| tab_state.tabs.first().map(|entry| entry.id.clone()))
+    };
+
+    let Some(tab_id) = target_tab_id else {
+        return false;
+    };
+
+    request_tab_close(&internals, &tab_id, PaneEmptyReason::ClosedLastTab);
+    true
 }
 
 pub fn focus_active_tab_in_pane(pane_widget: &gtk::Widget) -> bool {
@@ -698,10 +590,6 @@ pub struct PaneInternals {
     callbacks: Rc<PaneCallbacks>,
     working_directory: Rc<std::cell::RefCell<Option<String>>>,
     workspace_dragging: Rc<Cell<bool>>,
-    new_terminal_button: gtk::Button,
-    split_right_button: gtk::Button,
-    split_down_button: gtk::Button,
-    close_pane_button: gtk::Button,
 }
 
 impl TabState {
@@ -714,20 +602,7 @@ fn next_tab_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-// ---------------------------------------------------------------------------
-// Icon button helper
-// ---------------------------------------------------------------------------
-
-fn icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
-    let btn = gtk::Button::builder()
-        .icon_name(icon_name)
-        .tooltip_text(tooltip)
-        .has_frame(false)
-        .build();
-    btn.add_css_class("limux-pane-action");
-    btn
-}
-
+#[cfg_attr(not(test), allow(dead_code))]
 fn pane_action_tooltip(
     shortcuts: &ResolvedShortcutConfig,
     base: &str,
@@ -738,30 +613,13 @@ fn pane_action_tooltip(
         .unwrap_or_else(|| base.to_string())
 }
 
-/// Create a split-pane icon button with two rectangles separated by a divider.
-/// Horizontal = left|right panes, Vertical = top/bottom panes.
-#[allow(dead_code)]
-fn split_icon_button(orientation: gtk::Orientation, tooltip: &str) -> gtk::Button {
-    let icon = gtk::Box::new(orientation, 1);
-    icon.add_css_class("limux-split-icon");
-
-    let (class_name, count) = match orientation {
-        gtk::Orientation::Horizontal => ("limux-split-half-v", 2),
-        _ => ("limux-split-half-h", 2),
-    };
-
-    for _ in 0..count {
-        let half = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        half.add_css_class(class_name);
-        icon.append(&half);
-    }
-
+fn icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
     let btn = gtk::Button::builder()
-        .child(&icon)
+        .icon_name(icon_name)
         .tooltip_text(tooltip)
         .has_frame(false)
         .build();
-    btn.add_css_class("limux-split-btn");
+    btn.add_css_class("limux-pane-action");
     btn
 }
 
@@ -1281,38 +1139,11 @@ pub fn add_keybind_editor_tab_to_pane(
 }
 
 pub fn refresh_shortcut_tooltips(pane_widget: &gtk::Widget, shortcuts: &ResolvedShortcutConfig) {
-    let Some(internals) = find_pane_internals(pane_widget) else {
+    if find_pane_internals(pane_widget).is_none() {
         return;
-    };
+    }
 
-    internals
-        .new_terminal_button
-        .set_tooltip_text(Some(&pane_action_tooltip(
-            shortcuts,
-            "New terminal tab",
-            Some(ShortcutId::NewTerminal),
-        )));
-    internals
-        .split_right_button
-        .set_tooltip_text(Some(&pane_action_tooltip(
-            shortcuts,
-            "Split right",
-            Some(ShortcutId::SplitRight),
-        )));
-    internals
-        .split_down_button
-        .set_tooltip_text(Some(&pane_action_tooltip(
-            shortcuts,
-            "Split down",
-            Some(ShortcutId::SplitDown),
-        )));
-    internals
-        .close_pane_button
-        .set_tooltip_text(Some(&pane_action_tooltip(
-            shortcuts,
-            "Close pane",
-            Some(ShortcutId::CloseFocusedPane),
-        )));
+    let _ = shortcuts;
 }
 
 pub fn snapshot_pane_state(pane_widget: &gtk::Widget) -> Option<PaneState> {
@@ -1623,7 +1454,7 @@ fn build_tab_button_from_label(
                 .iter()
                 .any(|entry| entry.id == tab_id && entry.pinned);
             if !is_pinned {
-                remove_tab(
+                request_tab_close_with_parts(
                     &tab_strip,
                     &content_stack,
                     &tab_state,
@@ -1709,7 +1540,7 @@ fn show_tab_context_menu(tab_btn: &gtk::Box, tab_id: &str, context: &TabContextM
         let menu_ref = menu.clone();
         close_btn.connect_clicked(move |_| {
             menu_ref.popdown();
-            remove_tab(
+            request_tab_close_with_parts(
                 &ts,
                 &cs,
                 &state,
@@ -2355,6 +2186,63 @@ fn activate_tab(
     }
 }
 
+fn request_tab_close(internals: &Rc<PaneInternals>, tab_id: &str, empty_reason: PaneEmptyReason) {
+    request_tab_close_with_parts(
+        &internals.tab_strip,
+        &internals.content_stack,
+        &internals.tab_state,
+        tab_id,
+        &internals.callbacks,
+        &internals.pane_outer,
+        empty_reason,
+    );
+}
+
+fn request_tab_close_with_parts(
+    tab_strip: &gtk::Box,
+    content_stack: &gtk::Stack,
+    tab_state: &Rc<RefCell<TabState>>,
+    tab_id: &str,
+    callbacks: &Rc<PaneCallbacks>,
+    pane_outer: &gtk::Box,
+    empty_reason: PaneEmptyReason,
+) {
+    let should_confirm = {
+        let ts = tab_state.borrow();
+        ts.tabs.len() == 1
+            && ts.tabs.iter().any(|entry| entry.id == tab_id)
+            && matches!(empty_reason, PaneEmptyReason::ClosedLastTab)
+    };
+
+    let proceed = {
+        let tab_strip = tab_strip.clone();
+        let content_stack = content_stack.clone();
+        let tab_state = tab_state.clone();
+        let callbacks = callbacks.clone();
+        let pane_outer = pane_outer.clone();
+        let tab_id = tab_id.to_string();
+        Rc::new(move |confirmed: bool| {
+            if confirmed {
+                remove_tab(
+                    &tab_strip,
+                    &content_stack,
+                    &tab_state,
+                    &tab_id,
+                    &callbacks,
+                    &pane_outer,
+                    empty_reason,
+                );
+            }
+        })
+    };
+
+    if should_confirm {
+        (callbacks.on_confirm_last_tab_close)(&pane_outer.clone().upcast(), empty_reason, proceed);
+    } else {
+        proceed(true);
+    }
+}
+
 fn remove_tab(
     tab_strip: &gtk::Box,
     content_stack: &gtk::Stack,
@@ -2982,7 +2870,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            pane_action_tooltip(&unbound, "Close pane", Some(ShortcutId::CloseFocusedPane)),
+            pane_action_tooltip(&unbound, "Close pane", None),
             "Close pane"
         );
     }

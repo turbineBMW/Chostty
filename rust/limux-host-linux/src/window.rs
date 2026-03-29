@@ -64,6 +64,7 @@ struct AppState {
     shortcuts: Rc<ResolvedShortcutConfig>,
     stack: gtk::Stack,
     sidebar_list: gtk::ListBox,
+    sidebar_search_entry: gtk::SearchEntry,
     paned: gtk::Paned,
     new_ws_btn: gtk::Button,
     sidebar_animation: Option<adw::TimedAnimation>,
@@ -104,6 +105,7 @@ struct TabDragWorkspaceSeed {
 
 type State = Rc<RefCell<AppState>>;
 const SPLIT_RATIO_STATE_KEY: &str = "limux-split-ratio-state";
+const EMPTY_WORKSPACE_PAGE_NAME: &str = "limux-empty-workspaces";
 const PORTAL_DESKTOP_SERVICE: &str = "org.freedesktop.portal.Desktop";
 const PORTAL_DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
 const PORTAL_SETTINGS_INTERFACE: &str = "org.freedesktop.portal.Settings";
@@ -332,6 +334,235 @@ fn sidebar_is_visible(state: &AppState) -> bool {
         .start_child()
         .map(|sidebar| sidebar.is_visible() && state.paned.position() > 10)
         .unwrap_or(false)
+}
+
+fn sidebar_filter_query(state: &AppState) -> String {
+    state
+        .sidebar_search_entry
+        .text()
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn workspace_matches_sidebar_filter(workspace: &Workspace, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+
+    workspace.name.to_ascii_lowercase().contains(query)
+        || workspace
+            .folder_path
+            .as_deref()
+            .map(|path| path.to_ascii_lowercase().contains(query))
+            .unwrap_or(false)
+}
+
+fn apply_sidebar_filter(state: &State) {
+    let s = state.borrow();
+    let query = sidebar_filter_query(&s);
+    for workspace in &s.workspaces {
+        workspace
+            .sidebar_row
+            .set_visible(workspace_matches_sidebar_filter(workspace, &query));
+    }
+}
+
+fn build_sidebar_menu_section_title(title: &str) -> gtk::Label {
+    let label = gtk::Label::builder()
+        .label(title)
+        .xalign(0.0)
+        .margin_top(4)
+        .margin_bottom(2)
+        .build();
+    label.add_css_class("limux-sidebar-menu-section-title");
+    label
+}
+
+fn build_sidebar_menu_item(icon_name: &str, label: &str) -> gtk::Button {
+    let icon = gtk::Image::builder()
+        .icon_name(icon_name)
+        .pixel_size(16)
+        .build();
+    icon.add_css_class("limux-sidebar-menu-item-icon");
+
+    let text = gtk::Label::builder()
+        .label(label)
+        .xalign(0.0)
+        .hexpand(true)
+        .build();
+    text.add_css_class("limux-sidebar-menu-item-label");
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .hexpand(true)
+        .build();
+    content.append(&icon);
+    content.append(&text);
+
+    let button = gtk::Button::builder()
+        .child(&content)
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
+        .has_frame(false)
+        .build();
+    button.add_css_class("flat");
+    button.add_css_class("limux-sidebar-menu-item");
+    button
+}
+
+fn open_preferences_dialog(state: &State, anchor: &impl IsA<gtk::Widget>) {
+    let (config, shortcuts, on_capture, on_config_changed) = {
+        let s = state.borrow();
+        let state_for_capture = state.clone();
+        let state_for_config_changed = state.clone();
+        (
+            s.config.clone(),
+            s.shortcuts.clone(),
+            Rc::new(move |id, binding| persist_shortcut_binding(&state_for_capture, id, binding)),
+            Rc::new(
+                move |previous: &app_config::AppConfig, updated: &app_config::AppConfig| {
+                    let style_manager = adw::StyleManager::default();
+                    let system_prefers_dark =
+                        state_for_config_changed.borrow().system_prefers_dark.get();
+                    apply_appearance(&style_manager, system_prefers_dark, &updated.appearance);
+                    if let Err(err) = app_config::save(updated) {
+                        state_for_config_changed
+                            .borrow()
+                            .config
+                            .borrow_mut()
+                            .clone_from(previous);
+                        apply_appearance(&style_manager, system_prefers_dark, &previous.appearance);
+
+                        let detail = format!("Failed to save Limux settings: {err}");
+                        eprintln!("limux: {detail}");
+                        show_runtime_error(
+                            &state_for_config_changed,
+                            "Failed to save settings",
+                            &detail,
+                        );
+                    }
+                },
+            ),
+        )
+    };
+
+    crate::settings_editor::present_settings_dialog(
+        anchor,
+        crate::settings_editor::SettingsEditorInput {
+            config,
+            shortcuts,
+            on_capture,
+            on_config_changed,
+        },
+    );
+}
+
+fn build_sidebar_menu_popover(state: &State) -> gtk::Popover {
+    let popover = gtk::Popover::new();
+
+    let prefs_btn = build_sidebar_menu_item("preferences-system-symbolic", "Preferences");
+    let add_workspace_btn = build_sidebar_menu_item("folder-new-symbolic", "Add Workspace");
+    let new_terminal_btn =
+        build_sidebar_menu_item("utilities-terminal-symbolic", "New Terminal Tab");
+    let new_browser_btn = build_sidebar_menu_item("limux-globe-symbolic", "New Browser Tab");
+    let split_right_btn = build_sidebar_menu_item("limux-split-horizontal-symbolic", "Split Right");
+    let split_down_btn = build_sidebar_menu_item("limux-split-vertical-symbolic", "Split Down");
+    let close_pane_btn = build_sidebar_menu_item("window-close-symbolic", "Close Pane");
+
+    let menu_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .build();
+    menu_box.add_css_class("limux-sidebar-menu");
+    menu_box.append(&prefs_btn);
+    menu_box.append(&add_workspace_btn);
+    menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    menu_box.append(&build_sidebar_menu_section_title("ACTIVE PANE"));
+    menu_box.append(&new_terminal_btn);
+    menu_box.append(&new_browser_btn);
+    menu_box.append(&split_right_btn);
+    menu_box.append(&split_down_btn);
+    menu_box.append(&close_pane_btn);
+
+    popover.set_child(Some(&menu_box));
+
+    {
+        let state = state.clone();
+        let popover = popover.clone();
+        prefs_btn.connect_clicked(move |button| {
+            popover.popdown();
+            open_preferences_dialog(&state, button);
+        });
+    }
+
+    {
+        let state = state.clone();
+        let popover = popover.clone();
+        add_workspace_btn.connect_clicked(move |_| {
+            popover.popdown();
+            add_workspace(&state, None);
+        });
+    }
+
+    {
+        let state = state.clone();
+        let popover = popover.clone();
+        new_terminal_btn.connect_clicked(move |_| {
+            popover.popdown();
+            add_tab_to_focused_pane(&state, false);
+        });
+    }
+
+    {
+        let state = state.clone();
+        let popover = popover.clone();
+        new_browser_btn.connect_clicked(move |_| {
+            popover.popdown();
+            add_tab_to_focused_pane(&state, true);
+        });
+    }
+
+    {
+        let state = state.clone();
+        let popover = popover.clone();
+        split_right_btn.connect_clicked(move |_| {
+            popover.popdown();
+            split_focused_pane(&state, gtk::Orientation::Horizontal);
+        });
+    }
+
+    {
+        let state = state.clone();
+        let popover = popover.clone();
+        split_down_btn.connect_clicked(move |_| {
+            popover.popdown();
+            split_focused_pane(&state, gtk::Orientation::Vertical);
+        });
+    }
+
+    {
+        let state = state.clone();
+        let popover = popover.clone();
+        close_pane_btn.connect_clicked(move |_| {
+            popover.popdown();
+            close_focused_pane(&state);
+        });
+    }
+
+    {
+        let state = state.clone();
+        popover.connect_show(move |_| {
+            let has_active_pane = find_focused_pane(&state).is_some();
+            new_terminal_btn.set_sensitive(has_active_pane);
+            new_browser_btn.set_sensitive(has_active_pane);
+            split_right_btn.set_sensitive(has_active_pane);
+            split_down_btn.set_sensitive(has_active_pane);
+            close_pane_btn.set_sensitive(has_active_pane);
+        });
+    }
+
+    popover
 }
 
 fn begin_window_move_from_widget(
@@ -636,10 +867,51 @@ row:selected .limux-ws-star-btn {
     box-shadow: none;
 }
 .limux-sidebar-title {
-    color: alpha(@window_fg_color, 0.55);
+    color: alpha(@window_fg_color, 0.92);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+}
+.limux-sidebar-tool-btn {
+    background: transparent;
+    color: alpha(@window_fg_color, 0.62);
+    border: none;
+    border-radius: 8px;
+    min-width: 30px;
+    min-height: 30px;
+    padding: 0;
+}
+.limux-sidebar-tool-btn:hover {
+    background: alpha(@window_fg_color, 0.08);
+    color: @window_fg_color;
+}
+.limux-sidebar-search {
+    margin: 0 8px 6px 8px;
+}
+.limux-sidebar-menu {
+    margin: 6px;
+    min-width: 220px;
+}
+.limux-sidebar-menu-section-title {
+    color: alpha(@window_fg_color, 0.5);
     font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 1px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+}
+.limux-sidebar-menu-item {
+    padding: 0;
+    min-height: 0;
+}
+.limux-sidebar-menu-item > box {
+    padding: 8px 10px;
+}
+.limux-sidebar-menu-item-label {
+    color: @window_fg_color;
+    font-size: 13px;
+    font-weight: 500;
+}
+.limux-sidebar-menu-item-icon {
+    color: alpha(@window_fg_color, 0.62);
 }
 .limux-sidebar-btn {
     background: alpha(@window_fg_color, 0.08);
@@ -684,6 +956,39 @@ row:selected .limux-ws-path {
 }
 .limux-content {
     background-color: transparent;
+}
+.limux-empty-state {
+    background-color: color-mix(
+        in srgb,
+        @window_bg_color 94%,
+        @window_fg_color
+    );
+    padding: 48px;
+}
+.limux-empty-layout {
+    min-width: 360px;
+}
+.limux-empty-icon {
+    color: alpha(@window_fg_color, 0.18);
+}
+.limux-empty-kicker {
+    color: alpha(@accent_bg_color, 0.95);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+.limux-empty-title {
+    color: @window_fg_color;
+    font-size: 30px;
+    font-weight: 700;
+}
+.limux-empty-copy {
+    color: alpha(@window_fg_color, 0.7);
+    font-size: 15px;
+}
+.limux-empty-hint {
+    color: alpha(@window_fg_color, 0.42);
+    font-size: 13px;
 }
 "#;
 
@@ -800,25 +1105,62 @@ pub fn build_window(app: &adw::Application) {
         .child(&sidebar_list)
         .build();
 
-    let sidebar_title_label = gtk::Label::builder()
-        .label("WORKSPACES")
-        .xalign(0.0)
+    let sidebar_search_entry = gtk::SearchEntry::builder()
+        .placeholder_text("Filter workspaces")
         .hexpand(true)
-        .margin_start(12)
+        .build();
+    sidebar_search_entry.add_css_class("limux-sidebar-search");
+
+    let sidebar_search_revealer = gtk::Revealer::builder()
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .reveal_child(false)
+        .build();
+    sidebar_search_revealer.set_child(Some(&sidebar_search_entry));
+
+    let search_btn = gtk::Button::builder()
+        .icon_name("system-search-symbolic")
+        .tooltip_text("Filter workspaces")
+        .has_frame(false)
+        .build();
+    search_btn.add_css_class("flat");
+    search_btn.add_css_class("limux-sidebar-tool-btn");
+
+    let sidebar_title_label = gtk::Label::builder()
+        .label("Limux")
+        .xalign(0.5)
+        .halign(gtk::Align::Center)
         .build();
     sidebar_title_label.add_css_class("limux-sidebar-title");
+
+    let sidebar_drag_area = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .hexpand(true)
+        .halign(gtk::Align::Fill)
+        .build();
+    sidebar_drag_area.append(&sidebar_title_label);
+
+    let menu_btn = gtk::MenuButton::builder()
+        .icon_name("open-menu-symbolic")
+        .tooltip_text("Workspace actions")
+        .build();
+    menu_btn.add_css_class("flat");
+    menu_btn.add_css_class("limux-sidebar-tool-btn");
 
     let sidebar_title = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .margin_top(8)
         .margin_bottom(4)
+        .margin_start(8)
         .margin_end(6)
+        .spacing(4)
         .build();
-    sidebar_title.append(&sidebar_title_label);
+    sidebar_title.append(&search_btn);
+    sidebar_title.append(&sidebar_drag_area);
+    sidebar_title.append(&menu_btn);
 
     {
         let window = window.clone();
-        let drag_title = sidebar_title.clone();
+        let drag_title = sidebar_drag_area.clone();
         let drag = gtk::GestureClick::new();
         drag.set_button(1);
         drag.connect_pressed(move |gesture, _, x, y| {
@@ -830,7 +1172,7 @@ pub fn build_window(app: &adw::Application) {
             begin_window_move_from_widget(&drag_title, &window, &device, button, x, y, timestamp);
             gesture.set_state(gtk::EventSequenceState::Claimed);
         });
-        sidebar_title.add_controller(drag);
+        sidebar_drag_area.add_controller(drag);
     }
 
     let new_ws_btn = gtk::Button::builder()
@@ -872,6 +1214,7 @@ pub fn build_window(app: &adw::Application) {
         .build();
     sidebar.add_css_class("limux-sidebar");
     sidebar.append(&sidebar_title);
+    sidebar.append(&sidebar_search_revealer);
     sidebar.append(&sidebar_scroll);
     sidebar.append(&new_ws_btn);
 
@@ -906,6 +1249,7 @@ pub fn build_window(app: &adw::Application) {
         shortcuts,
         stack: stack.clone(),
         sidebar_list: sidebar_list.clone(),
+        sidebar_search_entry: sidebar_search_entry.clone(),
         paned: main_paned.clone(),
         new_ws_btn: new_ws_btn.clone(),
         sidebar_animation: None,
@@ -918,6 +1262,52 @@ pub fn build_window(app: &adw::Application) {
         _theme_gnome_settings: None,
         _theme_gnome_signal: None,
     }));
+
+    menu_btn.set_popover(Some(&build_sidebar_menu_popover(&state)));
+
+    {
+        let state = state.clone();
+        let revealer = sidebar_search_revealer.clone();
+        let entry = sidebar_search_entry.clone();
+        search_btn.connect_clicked(move |_| {
+            let should_reveal = !revealer.reveals_child();
+            revealer.set_reveal_child(should_reveal);
+            if should_reveal {
+                entry.grab_focus();
+            } else if !entry.text().is_empty() {
+                entry.set_text("");
+                apply_sidebar_filter(&state);
+            }
+        });
+    }
+
+    {
+        let state = state.clone();
+        sidebar_search_entry.connect_search_changed(move |_| {
+            apply_sidebar_filter(&state);
+        });
+    }
+
+    {
+        let state = state.clone();
+        let revealer = sidebar_search_revealer.clone();
+        let entry = sidebar_search_entry.clone();
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.connect_key_pressed(move |_, keyval, _, _| {
+            if keyval != gtk::gdk::Key::Escape {
+                return glib::Propagation::Proceed;
+            }
+            entry.set_text("");
+            revealer.set_reveal_child(false);
+            apply_sidebar_filter(&state);
+            glib::Propagation::Stop
+        });
+        sidebar_search_entry.add_controller(key_controller);
+    }
+
+    let empty_workspace_page = build_empty_workspace_page(&state);
+    stack.add_named(&empty_workspace_page, Some(EMPTY_WORKSPACE_PAGE_NAME));
+    stack.set_visible_child_name(EMPTY_WORKSPACE_PAGE_NAME);
 
     {
         let state = state.clone();
@@ -1336,7 +1726,7 @@ fn dispatch_shortcut_command(state: &State, command: ShortcutCommand) -> bool {
             true
         }
         ShortcutCommand::CloseFocusedPane => {
-            close_focused_pane(state);
+            close_active_tab_in_focused_pane(state);
             true
         }
         ShortcutCommand::FocusLeft => {
@@ -1901,6 +2291,87 @@ fn build_sidebar_row(
     )
 }
 
+fn build_empty_workspace_page(state: &State) -> gtk::Widget {
+    let icon = gtk::Image::builder()
+        .icon_name("folder-open-symbolic")
+        .pixel_size(110)
+        .halign(gtk::Align::Center)
+        .build();
+    icon.add_css_class("limux-empty-icon");
+
+    let kicker = gtk::Label::builder()
+        .label("LIMUX")
+        .xalign(0.5)
+        .halign(gtk::Align::Center)
+        .build();
+    kicker.add_css_class("limux-empty-kicker");
+
+    let title = gtk::Label::builder()
+        .label("No active workspaces")
+        .xalign(0.5)
+        .halign(gtk::Align::Center)
+        .justify(gtk::Justification::Center)
+        .wrap(true)
+        .build();
+    title.add_css_class("limux-empty-title");
+
+    let copy = gtk::Label::builder()
+        .label("Open a folder to create your first workspace.")
+        .xalign(0.5)
+        .halign(gtk::Align::Center)
+        .justify(gtk::Justification::Center)
+        .wrap(true)
+        .build();
+    copy.add_css_class("limux-empty-copy");
+
+    let hint = gtk::Label::builder()
+        .label("Choose a folder to start a workspace.")
+        .xalign(0.5)
+        .halign(gtk::Align::Center)
+        .justify(gtk::Justification::Center)
+        .wrap(true)
+        .build();
+    hint.add_css_class("limux-empty-hint");
+
+    let add_button = gtk::Button::builder()
+        .label("Add Workspace")
+        .halign(gtk::Align::Center)
+        .margin_top(8)
+        .build();
+    add_button.add_css_class("suggested-action");
+
+    let layout = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(14)
+        .hexpand(true)
+        .vexpand(true)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .build();
+    layout.add_css_class("limux-empty-layout");
+    layout.append(&icon);
+    layout.append(&kicker);
+    layout.append(&title);
+    layout.append(&copy);
+    layout.append(&hint);
+    layout.append(&add_button);
+
+    let page = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    page.add_css_class("limux-empty-state");
+    page.append(&layout);
+
+    let state = state.clone();
+    add_button.connect_clicked(move |_| {
+        add_workspace(&state, None);
+    });
+
+    page.upcast()
+}
+
 /// Abbreviate a path by replacing the home directory with ~.
 fn abbreviate_path(path: &str) -> String {
     if let Some(home) = dirs::home_dir() {
@@ -2182,6 +2653,7 @@ fn begin_workspace_inline_rename(state: &State, workspace_id: &str) {
                     workspace.name = next_name;
                 }
                 drop(s);
+                apply_sidebar_filter(&state_for_commit);
                 request_session_save(&state_for_commit);
             }
 
@@ -2366,6 +2838,18 @@ fn handle_tab_drop_to_workspace(state: &State, target_workspace_id: &str, payloa
     pane::move_tab_to_pane(&source_pane, tab_id, &target_pane)
 }
 
+fn sync_workspace_stack_visibility(state: &State) {
+    let (stack, page_name) = {
+        let s = state.borrow();
+        let page_name = s
+            .active_workspace()
+            .map(|workspace| format!("ws-{}", workspace.id))
+            .unwrap_or_else(|| EMPTY_WORKSPACE_PAGE_NAME.to_string());
+        (s.stack.clone(), page_name)
+    };
+    stack.set_visible_child_name(&page_name);
+}
+
 fn create_workspace_for_tab(state: &State, payload: &str) -> bool {
     let Some((pane_id, tab_id)) = payload.split_once(':') else {
         return false;
@@ -2442,8 +2926,9 @@ fn create_workspace_for_tab(state: &State, payload: &str) -> bool {
             path_label,
         });
         app_state.active_idx = app_state.workspaces.len() - 1;
-        app_state.stack.set_visible_child_name(&stack_name);
     }
+
+    sync_workspace_stack_visibility(state);
 
     {
         let sidebar_list = state.borrow().sidebar_list.clone();
@@ -2754,7 +3239,8 @@ fn add_workspace_from_state(state: &State, workspace: &WorkspaceState) {
         s.active_idx = s.workspaces.len() - 1;
     }
 
-    stack.set_visible_child_name(&stack_name);
+    sync_workspace_stack_visibility(state);
+    apply_sidebar_filter(state);
     sidebar_list.select_row(Some(&row));
 }
 
@@ -2768,21 +3254,20 @@ fn create_pane_for_workspace(
     skip_default_tab: bool,
 ) -> gtk::Box {
     let state_for_split = state.clone();
-    let state_for_close = state.clone();
     let state_for_bell = state.clone();
     let state_for_desktop_notification = state.clone();
     let state_for_keybinds = state.clone();
     let state_for_pwd = state.clone();
     let state_for_empty = state.clone();
     let ws_id_split = ws_id.to_string();
-    let ws_id_close = ws_id.to_string();
     let ws_id_bell = ws_id.to_string();
     let ws_id_desktop_notification = ws_id.to_string();
     let ws_id_pwd = ws_id.to_string();
     let ws_id_empty = ws_id.to_string();
+    let state_for_confirm_last_tab_close = state.clone();
+    let ws_id_confirm_last_tab_close = ws_id.to_string();
     let state_for_split_with_tab = state.clone();
     let state_for_config = state.clone();
-    let state_for_config_changed = state.clone();
     let ws_id_split_with_tab = ws_id.to_string();
 
     let callbacks = Rc::new(PaneCallbacks {
@@ -2799,9 +3284,6 @@ fn create_pane_for_workspace(
                     persist: true,
                 },
             );
-        }),
-        on_close_pane: Box::new(move |pane_widget| {
-            remove_pane_internal(&state_for_close, &ws_id_close, pane_widget, true);
         }),
         on_bell: Box::new(move || {
             // Defer to avoid RefCell borrow conflicts — bell can fire during state mutation
@@ -2844,6 +3326,15 @@ fn create_pane_for_workspace(
                 }
             });
         }),
+        on_confirm_last_tab_close: Box::new(move |pane_widget, reason, respond| {
+            confirm_last_tab_close(
+                &state_for_confirm_last_tab_close,
+                &ws_id_confirm_last_tab_close,
+                pane_widget,
+                reason,
+                respond,
+            );
+        }),
         on_empty: Box::new(move |pane_widget, reason| {
             let persist = matches!(reason, pane::PaneEmptyReason::ClosedLastTab);
             remove_pane_internal(&state_for_empty, &ws_id_empty, pane_widget, persist);
@@ -2869,30 +3360,6 @@ fn create_pane_for_workspace(
             let s = state_for_config.borrow();
             s.config.clone()
         }),
-        on_config_changed: Rc::new(
-            move |previous: &app_config::AppConfig, updated: &app_config::AppConfig| {
-                let style_manager = adw::StyleManager::default();
-                let system_prefers_dark =
-                    state_for_config_changed.borrow().system_prefers_dark.get();
-                apply_appearance(&style_manager, system_prefers_dark, &updated.appearance);
-                if let Err(err) = app_config::save(updated) {
-                    state_for_config_changed
-                        .borrow()
-                        .config
-                        .borrow_mut()
-                        .clone_from(previous);
-                    apply_appearance(&style_manager, system_prefers_dark, &previous.appearance);
-
-                    let detail = format!("Failed to save Limux settings: {err}");
-                    eprintln!("limux: {detail}");
-                    show_runtime_error(
-                        &state_for_config_changed,
-                        "Failed to save settings",
-                        &detail,
-                    );
-                }
-            },
-        ),
     });
 
     pane::create_pane(
@@ -2939,6 +3406,8 @@ fn close_workspace_by_id_internal(
     if s.workspaces.is_empty() {
         s.active_idx = 0;
         drop(s);
+        sync_workspace_stack_visibility(state);
+        apply_sidebar_filter(state);
         if persist {
             request_session_save(state);
         }
@@ -2957,13 +3426,12 @@ fn close_workspace_by_id_internal(
     );
     s.active_idx = new_idx;
 
-    let stack_name = format!("ws-{}", s.workspaces[new_idx].id);
-    s.stack.set_visible_child_name(&stack_name);
-
     let row = s.workspaces[new_idx].sidebar_row.clone();
     let sidebar_list = s.sidebar_list.clone();
     drop(s);
 
+    sync_workspace_stack_visibility(state);
+    apply_sidebar_filter(state);
     sidebar_list.select_row(Some(&row));
     if persist {
         request_session_save(state);
@@ -3294,10 +3762,6 @@ fn split_pane(
     new_pane.upcast()
 }
 
-fn remove_pane(state: &State, ws_id: &str, pane_widget: &gtk::Widget) {
-    remove_pane_internal(state, ws_id, pane_widget, true);
-}
-
 fn remove_pane_internal(state: &State, ws_id: &str, pane_widget: &gtk::Widget, persist: bool) {
     let parent = pane_widget.parent();
 
@@ -3367,6 +3831,64 @@ fn remove_pane_internal(state: &State, ws_id: &str, pane_widget: &gtk::Widget, p
     if persist {
         request_session_save(state);
     }
+}
+
+fn pane_will_destroy_workspace(pane_widget: &gtk::Widget) -> bool {
+    pane_widget
+        .parent()
+        .and_then(|parent| parent.downcast::<gtk::Stack>().ok())
+        .is_some()
+}
+
+fn should_confirm_last_tab_close_for_workspace_destruction(
+    will_destroy_workspace: bool,
+    reason: pane::PaneEmptyReason,
+) -> bool {
+    matches!(reason, pane::PaneEmptyReason::ClosedLastTab) && will_destroy_workspace
+}
+
+fn should_confirm_last_tab_close(pane_widget: &gtk::Widget, reason: pane::PaneEmptyReason) -> bool {
+    should_confirm_last_tab_close_for_workspace_destruction(
+        pane_will_destroy_workspace(pane_widget),
+        reason,
+    )
+}
+
+fn confirm_last_tab_close(
+    state: &State,
+    ws_id: &str,
+    pane_widget: &gtk::Widget,
+    reason: pane::PaneEmptyReason,
+    respond: Rc<dyn Fn(bool)>,
+) {
+    if !should_confirm_last_tab_close(pane_widget, reason) {
+        respond(true);
+        return;
+    }
+
+    let workspace_name = {
+        let s = state.borrow();
+        s.workspaces
+            .iter()
+            .find(|workspace| workspace.id == ws_id)
+            .map(|workspace| workspace.name.clone())
+            .unwrap_or_else(|| "this workspace".to_string())
+    };
+
+    let window = state.borrow().window.clone();
+    let dialog = gtk::AlertDialog::builder()
+        .modal(true)
+        .message("Close the last tab?")
+        .detail(format!(
+            "Closing the last tab will destroy the workspace \"{workspace_name}\"."
+        ))
+        .build();
+    dialog.set_buttons(&["Cancel", "Close Workspace"]);
+    dialog.set_cancel_button(0);
+    dialog.set_default_button(1);
+    dialog.choose(Some(&window), None::<&gio::Cancellable>, move |result| {
+        respond(matches!(result, Ok(1)));
+    });
 }
 
 fn handle_split_with_tab(
@@ -3440,7 +3962,7 @@ fn find_focused_pane(state: &State) -> Option<(String, gtk::Widget)> {
         (ws.id.clone(), ws.root.clone())
     };
 
-    Some((ws_id, root))
+    Some((ws_id, first_leaf_pane(&root)))
 }
 
 fn focused_shortcut_target(state: &State) -> pane::FocusedShortcutTarget {
@@ -3575,9 +4097,15 @@ fn cycle_focused_pane_tab(state: &State, delta: i32) {
     }
 }
 
+fn close_active_tab_in_focused_pane(state: &State) {
+    if let Some((_ws_id, pane_widget)) = find_focused_pane(state) {
+        pane::close_active_tab_in_pane(&pane_widget);
+    }
+}
+
 fn close_focused_pane(state: &State) {
     if let Some((ws_id, pane_widget)) = find_focused_pane(state) {
-        remove_pane(state, &ws_id, &pane_widget);
+        remove_pane_internal(state, &ws_id, &pane_widget, true);
     }
 }
 
@@ -3752,11 +4280,13 @@ mod tests {
         gtk_system_prefers_dark_from_raw, next_active_workspace_index, queue_session_save_request,
         resolved_system_prefers_dark, shortcut_allowed_while_browser_find_active,
         shortcut_blocked_by_editable, shortcut_command_from_key_event,
-        shortcut_dispatch_propagation, tab_drag_workspace_seed, workspace_drop_layout_path,
-        workspace_notification_message, EditableCaptureContext, PortalColorSchemePreference,
-        SessionSaveAccess, SessionSaveRequest, WorkspaceSeedSource,
+        shortcut_dispatch_propagation, should_confirm_last_tab_close_for_workspace_destruction,
+        tab_drag_workspace_seed, workspace_drop_layout_path, workspace_notification_message,
+        EditableCaptureContext, PortalColorSchemePreference, SessionSaveAccess, SessionSaveRequest,
+        WorkspaceSeedSource,
     };
     use crate::layout_state::{LayoutNodeState, PaneState, SplitOrientation, SplitState};
+    use crate::pane::PaneEmptyReason;
     use crate::shortcut_config::{
         default_shortcuts, resolve_shortcuts_from_str, EditableCapturePolicy, ShortcutCommand,
     };
@@ -4191,6 +4721,22 @@ mod tests {
         ));
         assert!(!shortcut_allowed_while_browser_find_active(
             ShortcutCommand::SurfaceFind
+        ));
+    }
+
+    #[test]
+    fn should_confirm_last_tab_close_only_when_workspace_would_be_destroyed() {
+        assert!(should_confirm_last_tab_close_for_workspace_destruction(
+            true,
+            PaneEmptyReason::ClosedLastTab
+        ));
+        assert!(!should_confirm_last_tab_close_for_workspace_destruction(
+            true,
+            PaneEmptyReason::MovedLastTabOut
+        ));
+        assert!(!should_confirm_last_tab_close_for_workspace_destruction(
+            false,
+            PaneEmptyReason::ClosedLastTab
         ));
     }
 

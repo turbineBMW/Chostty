@@ -202,10 +202,10 @@ These UI surfaces currently reflect shortcut overrides:
   - new terminal tab
   - split right
   - split down
-  - close pane
 
 These surfaces do not currently show a shortcut suffix:
 
+- pane close button
 - new browser tab button
 - browser navigation buttons (`Back`, `Forward`, `Reload`)
 - browser find bar controls
@@ -250,7 +250,7 @@ Launch Limux and verify:
 - `Ctrl+T` opens a terminal tab
 - `Ctrl+D` splits right
 - `Ctrl+Shift+D` splits down
-- `Ctrl+W` closes the focused pane
+- `Ctrl+W` closes the focused tab
 - `Ctrl+Page_Down` and `Ctrl+Page_Up` switch workspaces
 - pane button tooltips show the default shortcut suffixes where applicable
 - `Ctrl+Q` quits Limux
@@ -293,7 +293,7 @@ Restart Limux and verify:
 - the split-right button tooltip no longer shows a shortcut suffix
 - in a terminal pane, `Ctrl+D` now reaches the terminal app instead of being intercepted by Limux
 
-### 4. Verify Pane Tooltip Remap
+### 4. Verify Tab-Close Shortcut Remap
 
 Create:
 
@@ -308,11 +308,11 @@ Create:
 
 Restart Limux and verify:
 
-- pane button tooltips show `Ctrl+Alt+T` and `Ctrl+Alt+W`
+- the new terminal pane button tooltip shows `Ctrl+Alt+T`
 - `Ctrl+Alt+T` opens a terminal tab
 - `Ctrl+T` no longer opens a terminal tab
-- `Ctrl+Alt+W` closes the focused pane
-- `Ctrl+W` no longer closes the pane
+- `Ctrl+Alt+W` closes the focused tab
+- `Ctrl+W` no longer closes the tab
 
 ### 5. Duplicate-Binding Rejection
 

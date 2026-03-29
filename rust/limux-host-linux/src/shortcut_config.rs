@@ -468,7 +468,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 47] = [
         config_key: "close_focused_pane",
         action_name: "win.close-focused-pane",
         default_accel: "<Ctrl>w",
-        label: "Close Focused Pane",
+        label: "Close Focused Tab",
         registers_gtk_accel: false,
         command: ShortcutCommand::CloseFocusedPane,
         scope: ShortcutScope::Window,
