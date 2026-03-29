@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -42,6 +42,8 @@ pub struct AppConfig {
     pub focus: FocusConfig,
     #[serde(skip)]
     pub appearance: AppearanceConfig,
+    #[serde(default)]
+    pub workspace: WorkspaceConfig,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -54,6 +56,12 @@ pub struct AppearanceConfig {
 pub struct FocusConfig {
     #[serde(default)]
     pub hover_terminal_focus: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct WorkspaceConfig {
+    #[serde(default)]
+    pub default_directory: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -134,6 +142,7 @@ fn parse_app_config_value(root: &Value) -> AppConfig {
         .unwrap_or(false);
 
     let appearance = root.get("appearance").and_then(Value::as_object);
+    let workspace = root.get("workspace").and_then(Value::as_object);
 
     let color_scheme = appearance
         .and_then(|appearance| appearance.get("color_scheme"))
@@ -147,6 +156,13 @@ fn parse_app_config_value(root: &Value) -> AppConfig {
         .and_then(ColorScheme::from_str)
         .unwrap_or(color_scheme);
 
+    let default_directory = workspace
+        .and_then(|workspace| workspace.get("default_directory"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
     AppConfig {
         focus: FocusConfig {
             hover_terminal_focus,
@@ -155,6 +171,7 @@ fn parse_app_config_value(root: &Value) -> AppConfig {
             color_scheme,
             ghostty_color_scheme,
         },
+        workspace: WorkspaceConfig { default_directory },
     }
 }
 
@@ -181,10 +198,36 @@ fn save_to_path(path: &Path, config: &AppConfig) -> Result<(), String> {
         "focus".to_string(),
         json!({ "hover_terminal_focus": config.focus.hover_terminal_focus }),
     );
+    if let Some(default_directory) = config
+        .workspace
+        .default_directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        root.insert(
+            "workspace".to_string(),
+            json!({ "default_directory": default_directory }),
+        );
+    } else {
+        root.remove("workspace");
+    }
 
     let serialized =
         serde_json::to_string_pretty(&Value::Object(root)).expect("config should serialize");
     write_config_root_atomically(path, &serialized)
+}
+
+pub fn effective_workspace_default_directory(config: &AppConfig) -> Option<PathBuf> {
+    config
+        .workspace
+        .default_directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .or_else(dirs::home_dir)
 }
 
 fn read_existing_config_root_for_save(
@@ -386,6 +429,31 @@ mod tests {
     }
 
     #[test]
+    fn load_from_path_reads_workspace_default_directory() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = settings_path_in(dir.path());
+        fs::create_dir_all(path.parent().expect("config dir")).expect("create config dir");
+        fs::write(
+            &path,
+            r#"{
+  "workspace": {
+    "default_directory": "/tmp/projects"
+  }
+}
+"#,
+        )
+        .expect("write config");
+
+        let loaded = load_from_path(&path);
+
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(
+            loaded.config.workspace.default_directory.as_deref(),
+            Some("/tmp/projects")
+        );
+    }
+
+    #[test]
     fn load_from_path_defaults_ghostty_scheme_to_gtk_scheme_for_legacy_configs() {
         let dir = TempDir::new().expect("temp dir");
         let path = settings_path_in(dir.path());
@@ -436,6 +504,24 @@ mod tests {
     }
 
     #[test]
+    fn save_writes_workspace_default_directory_when_present() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = settings_path_in(dir.path());
+        fs::create_dir_all(path.parent().expect("config dir")).expect("create config dir");
+
+        let mut config = AppConfig::default();
+        config.workspace.default_directory = Some("/tmp/projects".to_string());
+        save_to_path(&path, &config).expect("save config");
+
+        let raw = fs::read_to_string(&path).expect("read config");
+        let parsed: Value = serde_json::from_str(&raw).expect("parse config");
+        assert_eq!(
+            parsed["workspace"]["default_directory"],
+            Value::String("/tmp/projects".to_string())
+        );
+    }
+
+    #[test]
     fn save_preserves_unrelated_top_level_keys() {
         let dir = TempDir::new().expect("temp dir");
         let path = settings_path_in(dir.path());
@@ -465,6 +551,30 @@ mod tests {
             parsed["appearance"]["color_scheme"],
             Value::String("dark".to_string())
         );
+    }
+
+    #[test]
+    fn save_to_path_removes_workspace_section_when_default_directory_is_unset() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = settings_path_in(dir.path());
+        fs::create_dir_all(path.parent().expect("config dir")).expect("create config dir");
+        fs::write(
+            &path,
+            r#"{
+  "workspace": {
+    "default_directory": "/tmp/projects"
+  }
+}
+"#,
+        )
+        .expect("write config");
+
+        let config = AppConfig::default();
+        save_to_path(&path, &config).expect("save config");
+
+        let raw = fs::read_to_string(&path).expect("read config");
+        let parsed: Value = serde_json::from_str(&raw).expect("parse config");
+        assert!(parsed.get("workspace").is_none());
     }
 
     #[test]
@@ -511,5 +621,26 @@ mod tests {
         assert_eq!(loaded.config, AppConfig::default());
         assert_eq!(loaded.warnings.len(), 1);
         assert!(loaded.warnings[0].contains("failed to load app config"));
+    }
+
+    #[test]
+    fn effective_workspace_default_directory_prefers_existing_configured_directory() {
+        let dir = TempDir::new().expect("temp dir");
+        let mut config = AppConfig::default();
+        config.workspace.default_directory = Some(dir.path().to_string_lossy().to_string());
+
+        let effective = effective_workspace_default_directory(&config);
+
+        assert_eq!(effective.as_deref(), Some(dir.path()));
+    }
+
+    #[test]
+    fn effective_workspace_default_directory_falls_back_when_configured_path_is_missing() {
+        let mut config = AppConfig::default();
+        config.workspace.default_directory = Some("/definitely/not/a/real/dir".to_string());
+
+        let effective = effective_workspace_default_directory(&config);
+
+        assert_eq!(effective, dirs::home_dir());
     }
 }

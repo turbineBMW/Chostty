@@ -1,11 +1,12 @@
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
 
-use crate::app_config::{AppConfig, ColorScheme};
+use crate::app_config::{self, AppConfig, ColorScheme};
 use crate::keybind_editor;
 use crate::shortcut_config::{NormalizedShortcut, ResolvedShortcutConfig, ShortcutId};
 
@@ -167,6 +168,41 @@ fn build_general_page(input: &SettingsEditorInput) -> gtk::Widget {
     hover_row.set_activatable_widget(Some(&hover_switch));
     group.add(&hover_row);
 
+    let workspace_row_subtitle =
+        "Folder chooser and Open by Path start here. Leave empty to use your home directory.";
+    let workspace_row = adw::ActionRow::builder()
+        .title("Default workspace directory")
+        .subtitle(workspace_row_subtitle)
+        .build();
+    workspace_row.set_title_lines(1);
+    workspace_row.set_subtitle_lines(3);
+    let workspace_entry = gtk::Entry::builder().hexpand(true).width_chars(30).build();
+    workspace_entry.set_valign(gtk::Align::Center);
+    workspace_entry.set_text(
+        input
+            .config
+            .borrow()
+            .workspace
+            .default_directory
+            .as_deref()
+            .unwrap_or(""),
+    );
+    if let Some(default_dir) =
+        app_config::effective_workspace_default_directory(&input.config.borrow())
+    {
+        workspace_entry.set_placeholder_text(Some(default_dir.to_string_lossy().as_ref()));
+    }
+    let workspace_clear_button = gtk::Button::builder()
+        .icon_name("edit-clear-symbolic")
+        .tooltip_text("Use home directory")
+        .valign(gtk::Align::Center)
+        .build();
+    workspace_clear_button.add_css_class("flat");
+    workspace_row.add_suffix(&workspace_entry);
+    workspace_row.add_suffix(&workspace_clear_button);
+    workspace_row.set_activatable_widget(Some(&workspace_entry));
+    group.add(&workspace_row);
+
     page.add(&group);
 
     {
@@ -207,6 +243,55 @@ fn build_general_page(input: &SettingsEditorInput) -> gtk::Widget {
             });
         });
     }
+    {
+        let config = input.config.clone();
+        let on_changed = input.on_config_changed.clone();
+        let row = workspace_row.clone();
+        let entry = workspace_entry.clone();
+        workspace_entry.connect_activate(move |_| {
+            commit_workspace_default_directory(
+                &config,
+                &*on_changed,
+                &row,
+                &entry,
+                workspace_row_subtitle,
+            );
+        });
+    }
+    {
+        let config = input.config.clone();
+        let on_changed = input.on_config_changed.clone();
+        let row = workspace_row.clone();
+        let entry = workspace_entry.clone();
+        let focus = gtk::EventControllerFocus::new();
+        focus.connect_leave(move |_| {
+            commit_workspace_default_directory(
+                &config,
+                &*on_changed,
+                &row,
+                &entry,
+                workspace_row_subtitle,
+            );
+        });
+        workspace_entry.add_controller(focus);
+    }
+    {
+        let config = input.config.clone();
+        let on_changed = input.on_config_changed.clone();
+        let row = workspace_row.clone();
+        let entry = workspace_entry.clone();
+        workspace_clear_button.connect_clicked(move |_| {
+            row.set_subtitle(workspace_row_subtitle);
+            entry.set_text("");
+            let already_unset = config.borrow().workspace.default_directory.is_none();
+            if already_unset {
+                return;
+            }
+            apply_config_change(&config, &*on_changed, |c| {
+                c.workspace.default_directory = None;
+            });
+        });
+    }
 
     let scroller = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -217,6 +302,74 @@ fn build_general_page(input: &SettingsEditorInput) -> gtk::Widget {
     scroller.set_vexpand(true);
 
     scroller.upcast()
+}
+
+fn commit_workspace_default_directory<F>(
+    config: &Rc<RefCell<AppConfig>>,
+    on_changed: &F,
+    row: &adw::ActionRow,
+    entry: &gtk::Entry,
+    default_subtitle: &str,
+) where
+    F: Fn(&AppConfig, &AppConfig) + ?Sized,
+{
+    match normalize_workspace_default_directory_input(entry.text().as_str()) {
+        Ok(default_directory) => {
+            row.set_subtitle(default_subtitle);
+            let current = config.borrow().workspace.default_directory.clone();
+            if current == default_directory {
+                if let Some(value) = default_directory.as_deref() {
+                    entry.set_text(value);
+                }
+                return;
+            }
+            if let Some(value) = default_directory.as_deref() {
+                entry.set_text(value);
+            } else {
+                entry.set_text("");
+            }
+            apply_config_change(config, on_changed, move |c| {
+                c.workspace.default_directory = default_directory.clone();
+            });
+        }
+        Err(message) => {
+            row.set_subtitle(&message);
+        }
+    }
+}
+
+fn normalize_workspace_default_directory_input(input: &str) -> Result<Option<String>, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let path = expand_workspace_setting_path(trimmed)
+        .ok_or_else(|| "Home directory is unavailable on this system".to_string())?;
+    if !path.exists() {
+        return Err("Directory does not exist".to_string());
+    }
+    if !path.is_dir() {
+        return Err("Path is not a directory".to_string());
+    }
+
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
+fn expand_workspace_setting_path(input: &str) -> Option<PathBuf> {
+    if input == "~" {
+        return dirs::home_dir();
+    }
+    if let Some(rest) = input.strip_prefix("~/") {
+        return dirs::home_dir().map(|home| home.join(rest));
+    }
+
+    let path = PathBuf::from(input);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        dirs::home_dir().map(|home| home.join(path))
+    }
 }
 
 #[cfg(test)]
@@ -238,5 +391,26 @@ mod tests {
         );
 
         assert!(config.borrow().focus.hover_terminal_focus);
+    }
+
+    #[test]
+    fn normalize_workspace_default_directory_input_expands_home_relative_paths() {
+        let home = dirs::home_dir().expect("home dir");
+        let input = format!(
+            "~/{}",
+            home.file_name().unwrap_or_default().to_string_lossy()
+        );
+
+        let resolved = expand_workspace_setting_path(&input).expect("expand path");
+
+        assert!(resolved.starts_with(&home));
+    }
+
+    #[test]
+    fn normalize_workspace_default_directory_input_accepts_empty_value() {
+        assert_eq!(
+            normalize_workspace_default_directory_input("   ").unwrap(),
+            None
+        );
     }
 }

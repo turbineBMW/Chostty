@@ -463,6 +463,7 @@ fn build_sidebar_menu_popover(state: &State) -> gtk::Popover {
 
     let prefs_btn = build_sidebar_menu_item("preferences-system-symbolic", "Preferences");
     let add_workspace_btn = build_sidebar_menu_item("folder-new-symbolic", "Add Workspace");
+    let open_by_path_btn = build_sidebar_menu_item("system-search-symbolic", "Open by Path");
     let new_terminal_btn =
         build_sidebar_menu_item("utilities-terminal-symbolic", "New Terminal Tab");
     let new_browser_btn = build_sidebar_menu_item("limux-globe-symbolic", "New Browser Tab");
@@ -477,6 +478,7 @@ fn build_sidebar_menu_popover(state: &State) -> gtk::Popover {
     menu_box.add_css_class("limux-sidebar-menu");
     menu_box.append(&prefs_btn);
     menu_box.append(&add_workspace_btn);
+    menu_box.append(&open_by_path_btn);
     menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     menu_box.append(&build_sidebar_menu_section_title("ACTIVE PANE"));
     menu_box.append(&new_terminal_btn);
@@ -501,7 +503,16 @@ fn build_sidebar_menu_popover(state: &State) -> gtk::Popover {
         let popover = popover.clone();
         add_workspace_btn.connect_clicked(move |_| {
             popover.popdown();
-            add_workspace(&state, None);
+            open_workspace_folder_chooser(&state);
+        });
+    }
+
+    {
+        let state = state.clone();
+        let popover = popover.clone();
+        open_by_path_btn.connect_clicked(move |_| {
+            popover.popdown();
+            open_workspace_by_path_dialog(&state);
         });
     }
 
@@ -1413,7 +1424,7 @@ pub fn build_window(app: &adw::Application) {
     {
         let state = state.clone();
         new_ws_btn.connect_clicked(move |_| {
-            add_workspace(&state, None);
+            open_workspace_folder_chooser(&state);
         });
     }
 
@@ -1673,7 +1684,11 @@ fn shortcut_match_from_key_press(
 fn dispatch_shortcut_command(state: &State, command: ShortcutCommand) -> bool {
     match command {
         ShortcutCommand::NewWorkspace => {
-            add_workspace(state, None);
+            open_workspace_folder_chooser(state);
+            true
+        }
+        ShortcutCommand::OpenWorkspaceByPath => {
+            open_workspace_by_path_dialog(state);
             true
         }
         ShortcutCommand::CloseWorkspace => {
@@ -2366,7 +2381,7 @@ fn build_empty_workspace_page(state: &State) -> gtk::Widget {
 
     let state = state.clone();
     add_button.connect_clicked(move |_| {
-        add_workspace(&state, None);
+        open_workspace_folder_chooser(&state);
     });
 
     page.upcast()
@@ -3130,8 +3145,27 @@ fn install_workspace_row_interactions(
     }
 }
 
+fn effective_workspace_start_directory(state: &State) -> Option<std::path::PathBuf> {
+    let config = {
+        let state_ref = state.borrow();
+        let config = state_ref.config.borrow().clone();
+        config
+    };
+    app_config::effective_workspace_default_directory(&config)
+}
+
+fn create_workspace_from_directory(state: &State, path: &std::path::Path) {
+    let path_str = path.to_string_lossy().to_string();
+    let folder_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path_str.clone());
+    create_workspace_with_folder(state, &folder_name, &path_str);
+}
+
 #[allow(deprecated)]
-fn add_workspace(state: &State, _working_directory: Option<&str>) {
+fn open_workspace_folder_chooser(state: &State) {
     // Open a folder chooser dialog (using FileChooserDialog to avoid portal crashes)
     let window: Option<gtk::Window> = {
         let s = state.borrow();
@@ -3151,10 +3185,9 @@ fn add_workspace(state: &State, _working_directory: Option<&str>) {
     );
     dialog.set_modal(true);
 
-    // Start in the home directory
-    if let Some(home) = dirs::home_dir() {
-        let home_file = gtk::gio::File::for_path(&home);
-        let _ = dialog.set_current_folder(Some(&home_file));
+    if let Some(default_dir) = effective_workspace_start_directory(state) {
+        let default_dir_file = gtk::gio::File::for_path(&default_dir);
+        let _ = dialog.set_current_folder(Some(&default_dir_file));
     }
 
     let state = state.clone();
@@ -3162,12 +3195,7 @@ fn add_workspace(state: &State, _working_directory: Option<&str>) {
         if response == gtk::ResponseType::Accept {
             if let Some(file) = dlg.file() {
                 if let Some(path) = file.path() {
-                    let path_str = path.to_string_lossy().to_string();
-                    let folder_name = path
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_string())
-                        .unwrap_or_else(|| path_str.clone());
-                    create_workspace_with_folder(&state, &folder_name, &path_str);
+                    create_workspace_from_directory(&state, &path);
                 }
             }
         }
@@ -3175,6 +3203,29 @@ fn add_workspace(state: &State, _working_directory: Option<&str>) {
     });
 
     dialog.show();
+}
+
+fn open_workspace_by_path_dialog(state: &State) {
+    let Some(initial_directory) = effective_workspace_start_directory(state) else {
+        show_runtime_error(
+            state,
+            "Failed to open path dialog",
+            "Limux could not determine a default starting directory.",
+        );
+        return;
+    };
+
+    let parent = state.borrow().window.clone().upcast::<gtk::Window>();
+    let state = state.clone();
+    crate::open_path_dialog::present_open_path_dialog(
+        crate::open_path_dialog::OpenPathDialogInput {
+            parent,
+            initial_directory,
+            on_open: Rc::new(move |path| {
+                create_workspace_from_directory(&state, &path);
+            }),
+        },
+    );
 }
 
 fn create_workspace_with_folder(state: &State, name: &str, folder_path: &str) {

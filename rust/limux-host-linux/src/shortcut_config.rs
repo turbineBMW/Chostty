@@ -14,6 +14,7 @@ pub const SHORTCUTS_FILE_NAME: &str = "shortcuts.json";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShortcutId {
     NewWorkspace,
+    OpenWorkspaceByPath,
     CloseWorkspace,
     QuitApp,
     NewInstance,
@@ -65,6 +66,7 @@ pub enum ShortcutId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShortcutCommand {
     NewWorkspace,
+    OpenWorkspaceByPath,
     CloseWorkspace,
     QuitApp,
     NewInstance,
@@ -308,7 +310,7 @@ struct ShortcutConfigFile {
     shortcuts: HashMap<String, serde_json::Value>,
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 47] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 48] = [
     ShortcutDefinition {
         id: ShortcutId::NewWorkspace,
         config_key: "new_workspace",
@@ -317,6 +319,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 47] = [
         label: "New Workspace",
         registers_gtk_accel: true,
         command: ShortcutCommand::NewWorkspace,
+        scope: ShortcutScope::Window,
+        editable_capture_policy: EditableCapturePolicy::BypassInEditable,
+    },
+    ShortcutDefinition {
+        id: ShortcutId::OpenWorkspaceByPath,
+        config_key: "open_workspace_by_path",
+        action_name: "win.open-workspace-by-path",
+        default_accel: "<Ctrl><Shift>p",
+        label: "Open by Path",
+        registers_gtk_accel: true,
+        command: ShortcutCommand::OpenWorkspaceByPath,
         scope: ShortcutScope::Window,
         editable_capture_policy: EditableCapturePolicy::BypassInEditable,
     },
@@ -1594,7 +1607,7 @@ mod tests {
 
     #[test]
     fn definitions_cover_current_host_shortcuts() {
-        assert_eq!(definitions().len(), 47);
+        assert_eq!(definitions().len(), 48);
     }
 
     #[test]
@@ -1625,6 +1638,7 @@ mod tests {
             gtk_actions,
             vec![
                 "win.new-workspace",
+                "win.open-workspace-by-path",
                 "win.close-workspace",
                 "app.quit",
                 "app.new-instance",
@@ -1797,7 +1811,7 @@ mod tests {
         .unwrap();
 
         let gtk_accels = resolved.gtk_accel_entries();
-        assert_eq!(gtk_accels.len(), 9);
+        assert_eq!(gtk_accels.len(), 10);
         assert_eq!(
             gtk_accels
                 .iter()

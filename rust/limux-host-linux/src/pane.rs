@@ -272,6 +272,9 @@ pub const PANE_CSS: &str = r#"
     font-size: 12px;
     margin: 3px 0;
 }
+.limux-tab-title {
+    font-weight: 700;
+}
 .limux-tab-separator {
     border-right: 2px solid alpha(@window_fg_color, 0.08);
 }
@@ -1293,10 +1296,11 @@ fn new_tab_title_label(title: &str) -> gtk::Label {
     let label = gtk::Label::builder()
         .label(title)
         .ellipsize(gtk::pango::EllipsizeMode::End)
-        .max_width_chars(28)
-        .xalign(0.0)
+        .xalign(0.5)
         .build();
+    label.add_css_class("limux-tab-title");
     label.set_hexpand(true);
+    label.set_halign(gtk::Align::Fill);
     label.set_can_target(false);
     label
 }
