@@ -109,6 +109,8 @@ These are the current supported config keys and defaults:
 | `toggle_fullscreen` | `F11` |
 | `next_workspace` | `<Ctrl>Page_Down` |
 | `prev_workspace` | `<Ctrl>Page_Up` |
+| `move_workspace_up` | `<Ctrl><Shift>Page_Up` |
+| `move_workspace_down` | `<Ctrl><Shift>Page_Down` |
 | `cycle_tab_prev` | `<Ctrl><Shift>Left` |
 | `cycle_tab_next` | `<Ctrl><Shift>Right` |
 | `split_down` | `<Ctrl><Shift>d` |
@@ -165,6 +167,8 @@ There are two host shortcut paths, both driven by the same resolved registry:
      - `toggle_fullscreen`
      - `next_workspace`
      - `prev_workspace`
+     - `move_workspace_up`
+     - `move_workspace_down`
 2. Capture-phase key dispatch
    - Used for everything in the table above, including the GTK-backed actions
    - Surface commands resolve the focused pane target first:
@@ -256,6 +260,7 @@ Launch Limux and verify:
 - `Ctrl+Shift+D` splits down
 - `Ctrl+W` closes the focused tab
 - `Ctrl+Page_Down` and `Ctrl+Page_Up` switch workspaces
+- `Ctrl+Shift+Page_Down` and `Ctrl+Shift+Page_Up` move the active workspace
 - pane button tooltips show the default shortcut suffixes where applicable
 - `Ctrl+Q` quits Limux
 - `Ctrl+Alt+N` opens a second Limux instance

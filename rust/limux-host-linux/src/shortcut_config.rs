@@ -25,6 +25,8 @@ pub enum ShortcutId {
     ToggleFullscreen,
     NextWorkspace,
     PrevWorkspace,
+    MoveWorkspaceUp,
+    MoveWorkspaceDown,
     CycleTabPrev,
     CycleTabNext,
     SplitDown,
@@ -79,6 +81,8 @@ pub enum ShortcutCommand {
     ToggleFullscreen,
     NextWorkspace,
     PrevWorkspace,
+    MoveWorkspaceUp,
+    MoveWorkspaceDown,
     CycleTabPrev,
     CycleTabNext,
     SplitDown,
@@ -314,7 +318,7 @@ struct ShortcutConfigFile {
     shortcuts: HashMap<String, serde_json::Value>,
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 50] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 52] = [
     ShortcutDefinition {
         id: ShortcutId::NewWorkspace,
         config_key: "new_workspace",
@@ -444,6 +448,28 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 50] = [
         label: "Previous Workspace",
         registers_gtk_accel: true,
         command: ShortcutCommand::PrevWorkspace,
+        scope: ShortcutScope::Window,
+        editable_capture_policy: EditableCapturePolicy::BypassInEditable,
+    },
+    ShortcutDefinition {
+        id: ShortcutId::MoveWorkspaceUp,
+        config_key: "move_workspace_up",
+        action_name: "win.move-workspace-up",
+        default_accel: "<Ctrl><Shift>Page_Up",
+        label: "Move Workspace Up",
+        registers_gtk_accel: true,
+        command: ShortcutCommand::MoveWorkspaceUp,
+        scope: ShortcutScope::Window,
+        editable_capture_policy: EditableCapturePolicy::BypassInEditable,
+    },
+    ShortcutDefinition {
+        id: ShortcutId::MoveWorkspaceDown,
+        config_key: "move_workspace_down",
+        action_name: "win.move-workspace-down",
+        default_accel: "<Ctrl><Shift>Page_Down",
+        label: "Move Workspace Down",
+        registers_gtk_accel: true,
+        command: ShortcutCommand::MoveWorkspaceDown,
         scope: ShortcutScope::Window,
         editable_capture_policy: EditableCapturePolicy::BypassInEditable,
     },
@@ -1635,7 +1661,7 @@ mod tests {
 
     #[test]
     fn definitions_cover_current_host_shortcuts() {
-        assert_eq!(definitions().len(), 50);
+        assert_eq!(definitions().len(), 52);
     }
 
     #[test]
@@ -1677,6 +1703,8 @@ mod tests {
                 "win.toggle-fullscreen",
                 "win.next-workspace",
                 "win.prev-workspace",
+                "win.move-workspace-up",
+                "win.move-workspace-down",
             ]
         );
     }
@@ -1849,7 +1877,7 @@ mod tests {
         .unwrap();
 
         let gtk_accels = resolved.gtk_accel_entries();
-        assert_eq!(gtk_accels.len(), 12);
+        assert_eq!(gtk_accels.len(), 14);
         assert_eq!(
             gtk_accels
                 .iter()
@@ -1914,6 +1942,14 @@ mod tests {
         assert_eq!(
             resolved.command_for_runtime_combo("ctrl+9"),
             Some(ShortcutCommand::ActivateLastWorkspace)
+        );
+        assert_eq!(
+            resolved.command_for_runtime_combo("ctrl+shift+page_up"),
+            Some(ShortcutCommand::MoveWorkspaceUp)
+        );
+        assert_eq!(
+            resolved.command_for_runtime_combo("ctrl+shift+page_down"),
+            Some(ShortcutCommand::MoveWorkspaceDown)
         );
     }
 

@@ -163,6 +163,7 @@ Most default shortcuts use `Ctrl`. Fullscreen defaults to `F11`. Custom remaps m
 | `Ctrl+T` | New terminal tab |
 | `Ctrl+Arrow` | Focus pane in direction |
 | `Ctrl+PageDown/Up` | Next or previous workspace |
+| `Ctrl+Shift+PageDown/Up` | Move active workspace down or up |
 | `Ctrl+1-9` | Switch to workspace by number |
 
 ## Architecture

@@ -1673,6 +1673,8 @@ fn dispatch_shortcut_command(state: &State, command: ShortcutCommand) -> bool {
             cycle_workspace(state, -1);
             true
         }
+        ShortcutCommand::MoveWorkspaceUp => move_active_workspace(state, -1),
+        ShortcutCommand::MoveWorkspaceDown => move_active_workspace(state, 1),
         ShortcutCommand::CycleTabPrev => {
             cycle_focused_pane_tab(state, -1);
             true
@@ -3461,6 +3463,31 @@ fn cycle_workspace(state: &State, direction: i32) {
     sidebar_list.select_row(Some(&row));
 }
 
+fn move_active_workspace(state: &State, direction: i32) -> bool {
+    let (source_id, target_id, drop_below) = {
+        let s = state.borrow();
+        let len = s.workspaces.len();
+        if len <= 1 {
+            return false;
+        }
+
+        let active_idx = s.active_idx;
+        let target_idx = match direction.cmp(&0) {
+            std::cmp::Ordering::Less if active_idx > 0 => active_idx - 1,
+            std::cmp::Ordering::Greater if active_idx + 1 < len => active_idx + 1,
+            _ => return false,
+        };
+
+        (
+            s.workspaces[active_idx].id.clone(),
+            s.workspaces[target_idx].id.clone(),
+            direction > 0,
+        )
+    };
+
+    reorder_workspace_by_id(state, &source_id, &target_id, drop_below)
+}
+
 fn focus_workspace_entrypoint(root: &gtk::Widget) {
     let pane = first_leaf_pane(root);
     if !pane::focus_active_tab_in_pane(&pane) {
@@ -4440,6 +4467,22 @@ mod tests {
                 gdk::ModifierType::CONTROL_MASK
             ),
             Some(ShortcutCommand::NextWorkspace)
+        );
+        assert_eq!(
+            shortcut_command_from_key_event(
+                &shortcuts,
+                gdk::Key::Page_Up,
+                gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK
+            ),
+            Some(ShortcutCommand::MoveWorkspaceUp)
+        );
+        assert_eq!(
+            shortcut_command_from_key_event(
+                &shortcuts,
+                gdk::Key::Page_Down,
+                gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK
+            ),
+            Some(ShortcutCommand::MoveWorkspaceDown)
         );
         assert_eq!(
             shortcut_command_from_key_event(
