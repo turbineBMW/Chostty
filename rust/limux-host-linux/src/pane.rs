@@ -157,6 +157,8 @@ pub struct PaneCallbacks {
     pub on_split: Box<PaneSplitCallback>,
     pub on_bell: Box<PaneSignalCallback>,
     pub on_desktop_notification: Box<PaneDesktopNotificationCallback>,
+    pub on_new_terminal_tab: Box<PaneWidgetCallback>,
+    pub on_new_browser_tab: Box<PaneWidgetCallback>,
     pub on_open_keybinds: Box<PaneWidgetCallback>,
     pub current_shortcuts: Box<PaneShortcutStateCallback>,
     pub on_capture_shortcut: Rc<PaneShortcutCaptureCallback>,
@@ -322,6 +324,22 @@ pub const PANE_CSS: &str = r#"
     background: alpha(@window_fg_color, 0.08);
     color: alpha(@window_fg_color, 0.8);
 }
+.limux-pane-menu-btn {
+    margin: 3px 0 3px 6px;
+}
+.limux-pane-menu-btn > button {
+    background: none;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 5px;
+    min-height: 0;
+    min-width: 0;
+    color: alpha(@window_fg_color, 0.4);
+}
+.limux-pane-menu-btn > button:hover {
+    background: alpha(@window_fg_color, 0.08);
+    color: alpha(@window_fg_color, 0.8);
+}
 .limux-pin-icon {
     font-size: 9px;
     margin-right: 2px;
@@ -366,7 +384,7 @@ pub const PANE_CSS: &str = r#"
 
 pub fn create_pane(
     callbacks: Rc<PaneCallbacks>,
-    _shortcuts: Rc<ResolvedShortcutConfig>,
+    shortcuts: Rc<ResolvedShortcutConfig>,
     working_directory: Option<&str>,
     initial_state: Option<&PaneState>,
     skip_default_tab: bool,
@@ -377,7 +395,7 @@ pub fn create_pane(
         .vexpand(true)
         .build();
 
-    // The header only renders tabs; workspace and pane actions live in the sidebar menu.
+    // Each pane header renders its own tabs and pane-scoped actions.
     let header = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(0)
@@ -394,6 +412,14 @@ pub fn create_pane(
         .hexpand(true)
         .build();
     tab_overlay.set_child(Some(&tab_strip));
+
+    let pane_menu_btn = gtk::MenuButton::builder()
+        .icon_name("open-menu-symbolic")
+        .tooltip_text("Pane actions")
+        .has_frame(false)
+        .valign(gtk::Align::Center)
+        .build();
+    pane_menu_btn.add_css_class("limux-pane-menu-btn");
 
     let drop_indicator = gtk::Box::new(gtk::Orientation::Vertical, 0);
     drop_indicator.add_css_class("limux-tab-drop-indicator");
@@ -423,6 +449,7 @@ pub fn create_pane(
     content_overlay.add_overlay(&content_drop_overlay);
 
     header.append(&tab_overlay);
+    header.append(&pane_menu_btn);
 
     outer.append(&header);
     outer.append(&content_overlay);
@@ -444,10 +471,12 @@ pub fn create_pane(
         drop_indicator: drop_indicator.clone(),
         content_drop_overlay: content_drop_overlay.clone(),
         pane_outer: outer.clone(),
+        pane_menu_btn: pane_menu_btn.clone(),
         callbacks: callbacks.clone(),
         working_directory: ws_wd.clone(),
         workspace_dragging: workspace_dragging.clone(),
     });
+    pane_menu_btn.set_popover(Some(&build_pane_menu_popover(&internals, &shortcuts)));
 
     if let Some(saved_state) = initial_state {
         restore_tabs_from_state(&internals, working_directory, saved_state);
@@ -590,6 +619,7 @@ pub struct PaneInternals {
     drop_indicator: gtk::Box,
     content_drop_overlay: gtk::Box,
     pane_outer: gtk::Box,
+    pane_menu_btn: gtk::MenuButton,
     callbacks: Rc<PaneCallbacks>,
     working_directory: Rc<std::cell::RefCell<Option<String>>>,
     workspace_dragging: Rc<Cell<bool>>,
@@ -624,6 +654,130 @@ fn icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
         .build();
     btn.add_css_class("limux-pane-action");
     btn
+}
+
+fn build_pane_menu_item(
+    icon_name: &str,
+    label: &str,
+    shortcut_label: Option<String>,
+) -> gtk::Button {
+    let icon = gtk::Image::builder()
+        .icon_name(icon_name)
+        .pixel_size(16)
+        .build();
+    icon.add_css_class("limux-sidebar-menu-item-icon");
+
+    let text = gtk::Label::builder()
+        .label(label)
+        .xalign(0.0)
+        .hexpand(true)
+        .build();
+    text.add_css_class("limux-sidebar-menu-item-label");
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .hexpand(true)
+        .build();
+    content.append(&icon);
+    content.append(&text);
+    if let Some(shortcut_label) = shortcut_label {
+        let shortcut = gtk::Label::builder()
+            .label(&shortcut_label)
+            .xalign(1.0)
+            .halign(gtk::Align::End)
+            .build();
+        shortcut.add_css_class("limux-sidebar-menu-item-shortcut");
+        content.append(&shortcut);
+    }
+
+    let button = gtk::Button::builder()
+        .child(&content)
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
+        .has_frame(false)
+        .build();
+    button.add_css_class("flat");
+    button.add_css_class("limux-sidebar-menu-item");
+    button
+}
+
+fn build_pane_menu_popover(
+    internals: &Rc<PaneInternals>,
+    shortcuts: &ResolvedShortcutConfig,
+) -> gtk::Popover {
+    let popover = gtk::Popover::new();
+    popover.add_css_class("limux-menu-popover");
+    let new_terminal_btn = build_pane_menu_item(
+        "utilities-terminal-symbolic",
+        "New Terminal Tab",
+        shortcuts.display_label_for_id(ShortcutId::NewTerminalInFocusedPane),
+    );
+    let new_browser_btn = build_pane_menu_item("limux-globe-symbolic", "New Browser Tab", None);
+    let split_right_btn = build_pane_menu_item(
+        "limux-split-horizontal-symbolic",
+        "Split Right",
+        shortcuts.display_label_for_id(ShortcutId::SplitRight),
+    );
+    let split_down_btn = build_pane_menu_item(
+        "limux-split-vertical-symbolic",
+        "Split Down",
+        shortcuts.display_label_for_id(ShortcutId::SplitDown),
+    );
+
+    let menu_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(0)
+        .build();
+    menu_box.add_css_class("limux-sidebar-menu");
+    menu_box.append(&new_terminal_btn);
+    menu_box.append(&new_browser_btn);
+    menu_box.append(&split_right_btn);
+    menu_box.append(&split_down_btn);
+
+    popover.set_child(Some(&menu_box));
+
+    {
+        let popover = popover.clone();
+        let pane_outer: gtk::Widget = internals.pane_outer.clone().upcast();
+        let callbacks = internals.callbacks.clone();
+        new_terminal_btn.connect_clicked(move |_| {
+            popover.popdown();
+            (callbacks.on_new_terminal_tab)(&pane_outer);
+        });
+    }
+
+    {
+        let popover = popover.clone();
+        let pane_outer: gtk::Widget = internals.pane_outer.clone().upcast();
+        let callbacks = internals.callbacks.clone();
+        new_browser_btn.connect_clicked(move |_| {
+            popover.popdown();
+            (callbacks.on_new_browser_tab)(&pane_outer);
+        });
+    }
+
+    {
+        let popover = popover.clone();
+        let pane_outer: gtk::Widget = internals.pane_outer.clone().upcast();
+        let callbacks = internals.callbacks.clone();
+        split_right_btn.connect_clicked(move |_| {
+            popover.popdown();
+            (callbacks.on_split)(&pane_outer, gtk::Orientation::Horizontal);
+        });
+    }
+
+    {
+        let popover = popover.clone();
+        let pane_outer: gtk::Widget = internals.pane_outer.clone().upcast();
+        let callbacks = internals.callbacks.clone();
+        split_down_btn.connect_clicked(move |_| {
+            popover.popdown();
+            (callbacks.on_split)(&pane_outer, gtk::Orientation::Vertical);
+        });
+    }
+
+    popover
 }
 
 // ---------------------------------------------------------------------------
@@ -1142,11 +1296,12 @@ pub fn add_keybind_editor_tab_to_pane(
 }
 
 pub fn refresh_shortcut_tooltips(pane_widget: &gtk::Widget, shortcuts: &ResolvedShortcutConfig) {
-    if find_pane_internals(pane_widget).is_none() {
+    let Some(internals) = find_pane_internals(pane_widget) else {
         return;
-    }
-
-    let _ = shortcuts;
+    };
+    internals
+        .pane_menu_btn
+        .set_popover(Some(&build_pane_menu_popover(&internals, shortcuts)));
 }
 
 pub fn snapshot_pane_state(pane_widget: &gtk::Widget) -> Option<PaneState> {

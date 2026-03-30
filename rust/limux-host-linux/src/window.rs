@@ -66,6 +66,7 @@ struct AppState {
     sidebar_list: gtk::ListBox,
     sidebar_search_entry: gtk::SearchEntry,
     paned: gtk::Paned,
+    sidebar_menu_btn: gtk::MenuButton,
     new_ws_btn: gtk::Button,
     sidebar_animation: Option<adw::TimedAnimation>,
     sidebar_animation_epoch: u64,
@@ -367,18 +368,11 @@ fn apply_sidebar_filter(state: &State) {
     }
 }
 
-fn build_sidebar_menu_section_title(title: &str) -> gtk::Label {
-    let label = gtk::Label::builder()
-        .label(title)
-        .xalign(0.0)
-        .margin_top(4)
-        .margin_bottom(2)
-        .build();
-    label.add_css_class("limux-sidebar-menu-section-title");
-    label
-}
-
-fn build_sidebar_menu_item(icon_name: &str, label: &str) -> gtk::Button {
+fn build_sidebar_menu_item(
+    icon_name: &str,
+    label: &str,
+    shortcut_label: Option<String>,
+) -> gtk::Button {
     let icon = gtk::Image::builder()
         .icon_name(icon_name)
         .pixel_size(16)
@@ -399,6 +393,15 @@ fn build_sidebar_menu_item(icon_name: &str, label: &str) -> gtk::Button {
         .build();
     content.append(&icon);
     content.append(&text);
+    if let Some(shortcut_label) = shortcut_label {
+        let shortcut = gtk::Label::builder()
+            .label(&shortcut_label)
+            .xalign(1.0)
+            .halign(gtk::Align::End)
+            .build();
+        shortcut.add_css_class("limux-sidebar-menu-item-shortcut");
+        content.append(&shortcut);
+    }
 
     let button = gtk::Button::builder()
         .child(&content)
@@ -458,34 +461,41 @@ fn open_preferences_dialog(state: &State, anchor: &impl IsA<gtk::Widget>) {
     );
 }
 
+fn open_settings_dialog(state: &State) {
+    let window = state.borrow().window.clone();
+    open_preferences_dialog(state, &window);
+}
+
 fn build_sidebar_menu_popover(state: &State) -> gtk::Popover {
     let popover = gtk::Popover::new();
+    popover.add_css_class("limux-menu-popover");
 
-    let prefs_btn = build_sidebar_menu_item("preferences-system-symbolic", "Preferences");
-    let add_workspace_btn = build_sidebar_menu_item("folder-new-symbolic", "Add Workspace");
-    let open_by_path_btn = build_sidebar_menu_item("system-search-symbolic", "Open by Path");
-    let new_terminal_btn =
-        build_sidebar_menu_item("utilities-terminal-symbolic", "New Terminal Tab");
-    let new_browser_btn = build_sidebar_menu_item("limux-globe-symbolic", "New Browser Tab");
-    let split_right_btn = build_sidebar_menu_item("limux-split-horizontal-symbolic", "Split Right");
-    let split_down_btn = build_sidebar_menu_item("limux-split-vertical-symbolic", "Split Down");
-    let close_pane_btn = build_sidebar_menu_item("window-close-symbolic", "Close Pane");
+    let shortcuts = { state.borrow().shortcuts.clone() };
+
+    let prefs_btn = build_sidebar_menu_item(
+        "preferences-system-symbolic",
+        "Preferences",
+        shortcuts.display_label_for_id(ShortcutId::OpenSettings),
+    );
+    let add_workspace_btn = build_sidebar_menu_item(
+        "folder-new-symbolic",
+        "Add Workspace",
+        shortcuts.display_label_for_id(ShortcutId::NewWorkspace),
+    );
+    let open_by_path_btn = build_sidebar_menu_item(
+        "system-search-symbolic",
+        "Open by Path",
+        shortcuts.display_label_for_id(ShortcutId::OpenWorkspaceByPath),
+    );
 
     let menu_box = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(2)
+        .spacing(0)
         .build();
     menu_box.add_css_class("limux-sidebar-menu");
     menu_box.append(&prefs_btn);
     menu_box.append(&add_workspace_btn);
     menu_box.append(&open_by_path_btn);
-    menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    menu_box.append(&build_sidebar_menu_section_title("ACTIVE PANE"));
-    menu_box.append(&new_terminal_btn);
-    menu_box.append(&new_browser_btn);
-    menu_box.append(&split_right_btn);
-    menu_box.append(&split_down_btn);
-    menu_box.append(&close_pane_btn);
 
     popover.set_child(Some(&menu_box));
 
@@ -516,64 +526,12 @@ fn build_sidebar_menu_popover(state: &State) -> gtk::Popover {
         });
     }
 
-    {
-        let state = state.clone();
-        let popover = popover.clone();
-        new_terminal_btn.connect_clicked(move |_| {
-            popover.popdown();
-            add_tab_to_focused_pane(&state, false);
-        });
-    }
-
-    {
-        let state = state.clone();
-        let popover = popover.clone();
-        new_browser_btn.connect_clicked(move |_| {
-            popover.popdown();
-            add_tab_to_focused_pane(&state, true);
-        });
-    }
-
-    {
-        let state = state.clone();
-        let popover = popover.clone();
-        split_right_btn.connect_clicked(move |_| {
-            popover.popdown();
-            split_focused_pane(&state, gtk::Orientation::Horizontal);
-        });
-    }
-
-    {
-        let state = state.clone();
-        let popover = popover.clone();
-        split_down_btn.connect_clicked(move |_| {
-            popover.popdown();
-            split_focused_pane(&state, gtk::Orientation::Vertical);
-        });
-    }
-
-    {
-        let state = state.clone();
-        let popover = popover.clone();
-        close_pane_btn.connect_clicked(move |_| {
-            popover.popdown();
-            close_focused_pane(&state);
-        });
-    }
-
-    {
-        let state = state.clone();
-        popover.connect_show(move |_| {
-            let has_active_pane = find_focused_pane(&state).is_some();
-            new_terminal_btn.set_sensitive(has_active_pane);
-            new_browser_btn.set_sensitive(has_active_pane);
-            split_right_btn.set_sensitive(has_active_pane);
-            split_down_btn.set_sensitive(has_active_pane);
-            close_pane_btn.set_sensitive(has_active_pane);
-        });
-    }
-
     popover
+}
+
+fn refresh_sidebar_menu_popover(state: &State) {
+    let menu_btn = { state.borrow().sidebar_menu_btn.clone() };
+    menu_btn.set_popover(Some(&build_sidebar_menu_popover(state)));
 }
 
 fn begin_window_move_from_widget(
@@ -828,11 +786,6 @@ row:selected .limux-ws-star-btn {
 .limux-ws-star-btn-active {
     color: @accent_bg_color;
 }
-.limux-ws-rename-entry {
-    min-height: 0;
-    padding: 0 4px;
-    margin: 0;
-}
 .limux-notify-dot {
     color: @accent_bg_color;
     font-size: 10px;
@@ -899,9 +852,16 @@ row:selected .limux-ws-star-btn {
 .limux-sidebar-search {
     margin: 0 8px 6px 8px;
 }
+popover.limux-menu-popover > contents {
+    padding: 4px;
+    border-radius: 16px;
+    border: 1px solid alpha(@window_fg_color, 0.08);
+    background: alpha(@window_bg_color, 0.98);
+    box-shadow: 0 16px 36px alpha(black, 0.28);
+}
 .limux-sidebar-menu {
-    margin: 6px;
-    min-width: 220px;
+    margin: 2px;
+    min-width: 250px;
 }
 .limux-sidebar-menu-section-title {
     color: alpha(@window_fg_color, 0.5);
@@ -912,17 +872,30 @@ row:selected .limux-ws-star-btn {
 .limux-sidebar-menu-item {
     padding: 0;
     min-height: 0;
+    border-radius: 12px;
 }
 .limux-sidebar-menu-item > box {
-    padding: 8px 10px;
+    padding: 9px 12px;
+    border-radius: 12px;
+    transition: background 160ms ease;
+}
+.limux-sidebar-menu-item:hover > box,
+.limux-sidebar-menu-item:active > box,
+.limux-sidebar-menu-item:checked > box {
+    background: alpha(@window_fg_color, 0.1);
 }
 .limux-sidebar-menu-item-label {
     color: @window_fg_color;
     font-size: 13px;
     font-weight: 500;
 }
+.limux-sidebar-menu-item-shortcut {
+    color: alpha(@window_fg_color, 0.5);
+    font-size: 12px;
+    font-weight: 500;
+}
 .limux-sidebar-menu-item-icon {
-    color: alpha(@window_fg_color, 0.62);
+    color: alpha(@window_fg_color, 0.68);
 }
 .limux-sidebar-btn {
     background: alpha(@window_fg_color, 0.08);
@@ -1262,6 +1235,7 @@ pub fn build_window(app: &adw::Application) {
         sidebar_list: sidebar_list.clone(),
         sidebar_search_entry: sidebar_search_entry.clone(),
         paned: main_paned.clone(),
+        sidebar_menu_btn: menu_btn.clone(),
         new_ws_btn: new_ws_btn.clone(),
         sidebar_animation: None,
         sidebar_animation_epoch: 0,
@@ -1274,7 +1248,7 @@ pub fn build_window(app: &adw::Application) {
         _theme_gnome_signal: None,
     }));
 
-    menu_btn.set_popover(Some(&build_sidebar_menu_popover(&state)));
+    refresh_sidebar_menu_popover(&state);
 
     {
         let state = state.clone();
@@ -1384,32 +1358,6 @@ pub fn build_window(app: &adw::Application) {
     register_app_actions(app, &state);
     register_window_actions(&window, &state);
     install_key_capture(&window, &state);
-
-    // Any click anywhere in the window commits an active sidebar rename,
-    // UNLESS the click is inside the rename Entry itself.
-    {
-        let sl = sidebar_list.clone();
-        let win = window.clone();
-        let click_anywhere = gtk::GestureClick::new();
-        click_anywhere.set_propagation_phase(gtk::PropagationPhase::Capture);
-        click_anywhere.connect_pressed(move |_, _, x, y| {
-            if let Some(entry) = find_active_rename_entry(&sl) {
-                // Translate click coords from window to the entry's coordinate space
-                if let Some((ex, ey)) = win.translate_coordinates(&entry, x, y) {
-                    let alloc = entry.allocation();
-                    if ex >= 0.0
-                        && ey >= 0.0
-                        && ex <= alloc.width() as f64
-                        && ey <= alloc.height() as f64
-                    {
-                        return; // click is inside the entry
-                    }
-                }
-                commit_any_active_rename(&sl);
-            }
-        });
-        window.add_controller(click_anywhere);
-    }
 
     {
         let state = state.clone();
@@ -1687,6 +1635,7 @@ fn dispatch_shortcut_command(state: &State, command: ShortcutCommand) -> bool {
             open_workspace_folder_chooser(state);
             true
         }
+        ShortcutCommand::RenameActiveWorkspace => rename_active_workspace(state),
         ShortcutCommand::OpenWorkspaceByPath => {
             open_workspace_by_path_dialog(state);
             true
@@ -1700,6 +1649,10 @@ fn dispatch_shortcut_command(state: &State, command: ShortcutCommand) -> bool {
             true
         }
         ShortcutCommand::NewInstance => spawn_new_instance(state),
+        ShortcutCommand::OpenSettings => {
+            open_settings_dialog(state);
+            true
+        }
         ShortcutCommand::ToggleSidebar => {
             toggle_sidebar(state);
             true
@@ -1841,6 +1794,7 @@ fn apply_shortcut_config(state: &State, shortcuts: ResolvedShortcutConfig) {
     };
 
     apply_shortcuts_to_application(&app, &shortcuts_rc);
+    refresh_sidebar_menu_popover(state);
     for root in workspace_roots {
         refresh_shortcut_tooltips_in_layout(&root, &shortcuts_rc);
     }
@@ -2493,7 +2447,7 @@ fn show_workspace_context_menu(state: &State, workspace_id: &str, row: &gtk::Lis
         let pop = popover.clone();
         rename_btn.connect_clicked(move |_| {
             pop.popdown();
-            begin_workspace_inline_rename(&state, &ws_id);
+            present_workspace_rename_dialog(&state, &ws_id);
         });
     }
     {
@@ -2555,59 +2509,31 @@ fn set_workspace_favorite_visual(workspace: &Workspace) {
     }
 }
 
-/// Find an active rename Entry in the sidebar (if any).
-fn find_active_rename_entry(sidebar_list: &gtk::ListBox) -> Option<gtk::Entry> {
-    fn find_entry(widget: &gtk::Widget) -> Option<gtk::Entry> {
-        if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
-            return Some(entry.clone());
+fn commit_workspace_rename(state: &State, workspace_id: &str, next_name: &str) -> bool {
+    let changed = {
+        let mut s = state.borrow_mut();
+        let Some(workspace) = s
+            .workspaces
+            .iter_mut()
+            .find(|workspace| workspace.id == workspace_id)
+        else {
+            return false;
+        };
+        if workspace.name == next_name {
+            return false;
         }
-        let mut child = widget.first_child();
-        while let Some(c) = child {
-            if let Some(entry) = find_entry(&c) {
-                return Some(entry);
-            }
-            child = c.next_sibling();
-        }
-        None
-    }
-    let mut row = sidebar_list.first_child();
-    while let Some(r) = row {
-        if let Some(entry) = find_entry(&r) {
-            return Some(entry);
-        }
-        row = r.next_sibling();
-    }
-    None
+        workspace.name = next_name.to_string();
+        workspace.name_label.set_label(next_name);
+        true
+    };
+
+    apply_sidebar_filter(state);
+    request_session_save(state);
+    changed
 }
 
-/// Find any active rename Entry in the sidebar and trigger its activate signal to commit.
-fn commit_any_active_rename(sidebar_list: &gtk::ListBox) {
-    let mut row = sidebar_list.first_child();
-    while let Some(r) = row {
-        // Walk into the row's children to find a gtk::Entry
-        fn find_entry(widget: &gtk::Widget) -> Option<gtk::Entry> {
-            if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
-                return Some(entry.clone());
-            }
-            let mut child = widget.first_child();
-            while let Some(c) = child {
-                if let Some(entry) = find_entry(&c) {
-                    return Some(entry);
-                }
-                child = c.next_sibling();
-            }
-            None
-        }
-        if let Some(entry) = find_entry(&r) {
-            entry.emit_activate();
-            return;
-        }
-        row = r.next_sibling();
-    }
-}
-
-fn begin_workspace_inline_rename(state: &State, workspace_id: &str) {
-    let (label, current_name) = {
+fn present_workspace_rename_dialog(state: &State, workspace_id: &str) {
+    let (parent, current_name) = {
         let s = state.borrow();
         let Some(workspace) = s
             .workspaces
@@ -2616,85 +2542,50 @@ fn begin_workspace_inline_rename(state: &State, workspace_id: &str) {
         else {
             return;
         };
-        (workspace.name_label.clone(), workspace.name.clone())
+        (s.window.clone(), workspace.name.clone())
     };
-
-    let Some(parent) = label.parent().and_then(|p| p.downcast::<gtk::Box>().ok()) else {
-        return;
-    };
-
-    // Avoid stacking multiple rename entries if the user right-clicks repeatedly.
-    let mut child = parent.first_child();
-    while let Some(widget) = child {
-        if widget.is::<gtk::Entry>() {
-            return;
-        }
-        child = widget.next_sibling();
-    }
 
     let entry = gtk::Entry::builder()
-        .text(&current_name)
         .hexpand(true)
+        .activates_default(true)
+        .placeholder_text("New workspace name")
         .build();
-    entry.add_css_class("limux-ws-rename-entry");
+    let heading = format!("Rename {current_name}");
+    let dialog = adw::AlertDialog::new(Some(&heading), None);
+    dialog.set_follows_content_size(true);
+    dialog.set_content_width(420);
+    dialog.set_focus(Some(&entry));
+    dialog.set_extra_child(Some(&entry));
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("rename", "Rename");
+    dialog.set_close_response("cancel");
+    dialog.set_default_response(Some("rename"));
+    dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+    dialog.set_response_enabled("rename", false);
 
-    label.set_visible(false);
-    parent.insert_child_after(&entry, Some(&label));
-    entry.grab_focus();
-    entry.select_region(0, -1);
-
-    let commit_guard = Rc::new(std::cell::Cell::new(false));
-    let state_for_commit = state.clone();
-    let workspace_id = workspace_id.to_string();
-    let label_for_commit = label.clone();
-    let parent_for_commit = parent.clone();
-    let commit = {
-        let commit_guard = commit_guard.clone();
-        move |entry: &gtk::Entry| {
-            if commit_guard.get() {
+    {
+        let dialog = dialog.clone();
+        entry.connect_changed(move |entry| {
+            dialog.set_response_enabled("rename", !entry.text().trim().is_empty());
+        });
+    }
+    {
+        let state = state.clone();
+        let workspace_id = workspace_id.to_string();
+        let entry = entry.clone();
+        dialog.connect_response(Some("rename"), move |dialog, _| {
+            let next_name = entry.text().trim().to_string();
+            if next_name.is_empty() {
                 return;
             }
-            commit_guard.set(true);
-
-            let next_name = entry.text().trim().to_string();
-            if !next_name.is_empty() {
-                label_for_commit.set_label(&next_name);
-                let mut s = state_for_commit.borrow_mut();
-                if let Some(workspace) = s
-                    .workspaces
-                    .iter_mut()
-                    .find(|workspace| workspace.id == workspace_id)
-                {
-                    workspace.name = next_name;
-                }
-                drop(s);
-                apply_sidebar_filter(&state_for_commit);
-                request_session_save(&state_for_commit);
-            }
-
-            label_for_commit.set_visible(true);
-            parent_for_commit.remove(entry);
-        }
-    };
-
-    {
-        let commit = commit.clone();
-        entry.connect_activate(move |entry| {
-            commit(entry);
+            commit_workspace_rename(&state, &workspace_id, &next_name);
+            dialog.close();
         });
     }
-    {
-        let commit = commit.clone();
-        let focus = gtk::EventControllerFocus::new();
-        focus.connect_leave(move |controller| {
-            if let Some(widget) = controller.widget() {
-                if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
-                    commit(entry);
-                }
-            }
-        });
-        entry.add_controller(focus);
-    }
+
+    dialog.present(Some(&parent));
+    entry.grab_focus();
+    entry.select_region(0, -1);
 }
 
 fn reorder_workspace_by_id(
@@ -3352,6 +3243,12 @@ fn create_pane_for_workspace(
                 mark_workspace_unread_with_message(&state, &ws_id, &message);
             });
         }),
+        on_new_terminal_tab: Box::new(move |pane_widget| {
+            pane::add_terminal_tab_to_pane(pane_widget);
+        }),
+        on_new_browser_tab: Box::new(move |pane_widget| {
+            pane::add_browser_tab_to_pane(pane_widget);
+        }),
         on_open_keybinds: Box::new(move |anchor| {
             open_keybind_editor_tab(&state_for_keybinds, anchor);
         }),
@@ -3430,6 +3327,18 @@ fn close_workspace(state: &State) {
     if let Some(id) = id {
         close_workspace_by_id(state, &id);
     }
+}
+
+fn rename_active_workspace(state: &State) -> bool {
+    let id = {
+        let s = state.borrow();
+        s.active_workspace().map(|workspace| workspace.id.clone())
+    };
+    let Some(id) = id else {
+        return false;
+    };
+    present_workspace_rename_dialog(state, &id);
+    true
 }
 
 fn close_workspace_by_id(state: &State, id: &str) {
@@ -4154,12 +4063,6 @@ fn close_active_tab_in_focused_pane(state: &State) {
     }
 }
 
-fn close_focused_pane(state: &State) {
-    if let Some((ws_id, pane_widget)) = find_focused_pane(state) {
-        remove_pane_internal(state, &ws_id, &pane_widget, true);
-    }
-}
-
 fn add_tab_to_focused_pane(_state: &State, _browser: bool) {
     if let Some((_ws_id, pane_widget)) = find_focused_pane(_state) {
         if _browser {
@@ -4579,8 +4482,24 @@ mod tests {
             Some(ShortcutCommand::NewInstance)
         );
         assert_eq!(
+            shortcut_command_from_key_event(
+                &shortcuts,
+                gdk::Key::R,
+                gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK
+            ),
+            Some(ShortcutCommand::RenameActiveWorkspace)
+        );
+        assert_eq!(
             shortcut_command_from_key_event(&shortcuts, gdk::Key::F11, gdk::ModifierType::empty()),
             Some(ShortcutCommand::ToggleFullscreen)
+        );
+        assert_eq!(
+            shortcut_command_from_key_event(
+                &shortcuts,
+                gdk::Key::comma,
+                gdk::ModifierType::CONTROL_MASK
+            ),
+            Some(ShortcutCommand::OpenSettings)
         );
         assert_eq!(
             shortcut_command_from_key_event(

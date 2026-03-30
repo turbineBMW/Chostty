@@ -14,10 +14,12 @@ pub const SHORTCUTS_FILE_NAME: &str = "shortcuts.json";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShortcutId {
     NewWorkspace,
+    RenameActiveWorkspace,
     OpenWorkspaceByPath,
     CloseWorkspace,
     QuitApp,
     NewInstance,
+    OpenSettings,
     ToggleSidebar,
     ToggleTopBar,
     ToggleFullscreen,
@@ -66,10 +68,12 @@ pub enum ShortcutId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShortcutCommand {
     NewWorkspace,
+    RenameActiveWorkspace,
     OpenWorkspaceByPath,
     CloseWorkspace,
     QuitApp,
     NewInstance,
+    OpenSettings,
     ToggleSidebar,
     ToggleTopBar,
     ToggleFullscreen,
@@ -310,7 +314,7 @@ struct ShortcutConfigFile {
     shortcuts: HashMap<String, serde_json::Value>,
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 48] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 50] = [
     ShortcutDefinition {
         id: ShortcutId::NewWorkspace,
         config_key: "new_workspace",
@@ -319,6 +323,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 48] = [
         label: "New Workspace",
         registers_gtk_accel: true,
         command: ShortcutCommand::NewWorkspace,
+        scope: ShortcutScope::Window,
+        editable_capture_policy: EditableCapturePolicy::BypassInEditable,
+    },
+    ShortcutDefinition {
+        id: ShortcutId::RenameActiveWorkspace,
+        config_key: "rename_active_workspace",
+        action_name: "win.rename-active-workspace",
+        default_accel: "<Ctrl><Alt>r",
+        label: "Rename Active Workspace",
+        registers_gtk_accel: true,
+        command: ShortcutCommand::RenameActiveWorkspace,
         scope: ShortcutScope::Window,
         editable_capture_policy: EditableCapturePolicy::BypassInEditable,
     },
@@ -364,6 +379,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 48] = [
         registers_gtk_accel: true,
         command: ShortcutCommand::NewInstance,
         scope: ShortcutScope::AppGlobal,
+        editable_capture_policy: EditableCapturePolicy::AlwaysCapture,
+    },
+    ShortcutDefinition {
+        id: ShortcutId::OpenSettings,
+        config_key: "open_settings",
+        action_name: "win.open-settings",
+        default_accel: "<Ctrl>comma",
+        label: "Open Settings",
+        registers_gtk_accel: true,
+        command: ShortcutCommand::OpenSettings,
+        scope: ShortcutScope::Window,
         editable_capture_policy: EditableCapturePolicy::AlwaysCapture,
     },
     ShortcutDefinition {
@@ -1516,6 +1542,7 @@ fn unshifted_keyval_from_mappings(
 fn normalize_runtime_key(key: &str) -> String {
     let normalized = key.trim().replace(['-', ' '], "_").to_ascii_lowercase();
     match normalized.as_str() {
+        "," => "comma".to_string(),
         "pageup" => "page_up".to_string(),
         "pagedown" => "page_down".to_string(),
         "return" => "enter".to_string(),
@@ -1558,6 +1585,7 @@ fn runtime_key_to_gtk_key(key: &str) -> String {
 
 fn display_key_label(key: &str) -> String {
     match key {
+        "comma" => ",".to_string(),
         "page_up" => "Page Up".to_string(),
         "page_down" => "Page Down".to_string(),
         "left" => "Left".to_string(),
@@ -1607,21 +1635,21 @@ mod tests {
 
     #[test]
     fn definitions_cover_current_host_shortcuts() {
-        assert_eq!(definitions().len(), 48);
+        assert_eq!(definitions().len(), 50);
     }
 
     #[test]
-    fn definitions_have_unique_ids_and_action_names_and_accels() {
+    fn definitions_have_unique_ids_and_action_names_and_default_runtime_combos() {
         let defs = definitions();
         let mut ids = HashMap::new();
         let mut actions = HashMap::new();
-        let mut accel_keys = HashMap::new();
+        let mut runtime_combos = HashMap::new();
 
         for def in defs {
             assert!(ids.insert(def.id, def.config_key).is_none());
             assert!(actions.insert(def.action_name, def.config_key).is_none());
-            assert!(accel_keys
-                .insert(def.config_key, def.default_accel)
+            assert!(runtime_combos
+                .insert(def.default_binding().to_runtime_combo(), def.config_key)
                 .is_none());
         }
     }
@@ -1638,10 +1666,12 @@ mod tests {
             gtk_actions,
             vec![
                 "win.new-workspace",
+                "win.rename-active-workspace",
                 "win.open-workspace-by-path",
                 "win.close-workspace",
                 "app.quit",
                 "app.new-instance",
+                "win.open-settings",
                 "win.toggle-sidebar",
                 "win.toggle-top-bar",
                 "win.toggle-fullscreen",
@@ -1656,6 +1686,14 @@ mod tests {
         let shortcut = NormalizedShortcut::parse("<Shift><Ctrl>Page_Down").unwrap();
         assert_eq!(shortcut.to_config_accel(), "<Ctrl><Shift>Page_Down");
         assert_eq!(shortcut.to_runtime_combo(), "ctrl+shift+page_down");
+    }
+
+    #[test]
+    fn normalized_shortcut_normalizes_comma_keys_for_display_and_config() {
+        let shortcut = NormalizedShortcut::parse("<Ctrl>,").unwrap();
+        assert_eq!(shortcut.to_config_accel(), "<Ctrl>comma");
+        assert_eq!(shortcut.to_runtime_combo(), "ctrl+comma");
+        assert_eq!(shortcut.to_display_label(), "Ctrl+,");
     }
 
     #[test]
@@ -1811,7 +1849,7 @@ mod tests {
         .unwrap();
 
         let gtk_accels = resolved.gtk_accel_entries();
-        assert_eq!(gtk_accels.len(), 10);
+        assert_eq!(gtk_accels.len(), 12);
         assert_eq!(
             gtk_accels
                 .iter()
@@ -1860,6 +1898,10 @@ mod tests {
             resolved.command_for_runtime_combo("ctrl+t"),
             Some(ShortcutCommand::NewTerminal)
         );
+        assert_eq!(
+            resolved.command_for_runtime_combo("ctrl+alt+r"),
+            Some(ShortcutCommand::RenameActiveWorkspace)
+        );
         assert_eq!(resolved.command_for_runtime_combo("ctrl+c"), None);
         assert_eq!(
             resolved.command_for_runtime_combo("ctrl+shift+c"),
@@ -1879,6 +1921,12 @@ mod tests {
     fn resolved_shortcuts_expose_default_display_labels_for_editor_rows() {
         let resolved = default_shortcuts();
 
+        assert_eq!(
+            resolved
+                .default_display_label_for_id(ShortcutId::OpenSettings)
+                .as_deref(),
+            Some("Ctrl+,")
+        );
         assert_eq!(
             resolved
                 .default_display_label_for_id(ShortcutId::SplitRight)

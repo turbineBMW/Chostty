@@ -99,9 +99,11 @@ These are the current supported config keys and defaults:
 | Config key | Default |
 |---|---|
 | `new_workspace` | `<Ctrl><Shift>n` |
+| `open_workspace_by_path` | `<Ctrl><Shift>p` |
 | `close_workspace` | `<Ctrl><Shift>w` |
 | `quit_app` | `<Ctrl>q` |
 | `new_instance` | `<Ctrl><Alt>n` |
+| `open_settings` | `<Ctrl>comma` |
 | `toggle_sidebar` | `<Ctrl>m` |
 | `toggle_top_bar` | `<Ctrl><Shift>m` |
 | `toggle_fullscreen` | `F11` |
@@ -153,9 +155,11 @@ There are two host shortcut paths, both driven by the same resolved registry:
 1. GTK accelerators
    - Used for:
      - `new_workspace`
+     - `open_workspace_by_path`
      - `close_workspace`
      - `quit_app`
      - `new_instance`
+     - `open_settings`
      - `toggle_sidebar`
      - `toggle_top_bar`
      - `toggle_fullscreen`

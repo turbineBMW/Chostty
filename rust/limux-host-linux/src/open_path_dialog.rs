@@ -385,7 +385,11 @@ fn sync_path_input_ui(
     sync_suggestions_list(
         suggestions_list,
         suggestions_scroll,
-        if suggestions_visible { Some(&session) } else { None },
+        if suggestions_visible {
+            Some(&session)
+        } else {
+            None
+        },
     );
     helper_label.set_text(&state.helper_text);
     open_button.set_sensitive(state.valid_directory);
@@ -619,8 +623,7 @@ fn analyze_path_input(
     let resolved_path = resolve_input_path(input, initial_directory);
     let valid_directory = resolved_path.is_dir();
     let helper_text = if suggestions_visible && selection_active {
-        "Press Enter to accept the selected directory. Press Enter again to open it."
-            .to_string()
+        "Press Enter to accept the selected directory. Press Enter again to open it.".to_string()
     } else if valid_directory && !input.trim().ends_with('/') {
         format!(
             "Press Enter to open {}. Type / to browse child directories.",

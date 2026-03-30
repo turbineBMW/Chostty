@@ -62,6 +62,8 @@ sudo ./install.sh --uninstall
 sudo apt install libgtk-4-1 libadwaita-1-0 libwebkitgtk-6.0-4
 ```
 
+Limux now requires `libadwaita >= 1.5`, which is available in Ubuntu 24.04+ and Debian 13+.
+
 ## Build from source
 
 ### Prerequisites
@@ -109,6 +111,7 @@ Most default shortcuts use `Ctrl`. Fullscreen defaults to `F11`. Custom remaps m
 |---|---|
 | `Ctrl+Q` | Quit Limux |
 | `Ctrl+Alt+N` | Open a new Limux instance |
+| `Ctrl+,` | Open settings |
 | `F11` | Toggle fullscreen |
 
 ### Browser
