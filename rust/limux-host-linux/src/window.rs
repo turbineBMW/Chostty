@@ -1118,8 +1118,7 @@ pub fn build_window(app: &adw::Application) {
 
     let sidebar_drag_area = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .hexpand(true)
-        .halign(gtk::Align::Fill)
+        .halign(gtk::Align::Center)
         .build();
     sidebar_drag_area.append(&sidebar_title_label);
 
@@ -1130,17 +1129,16 @@ pub fn build_window(app: &adw::Application) {
     menu_btn.add_css_class("flat");
     menu_btn.add_css_class("limux-sidebar-tool-btn");
 
-    let sidebar_title = gtk::Box::builder()
+    let sidebar_title = gtk::CenterBox::builder()
         .orientation(gtk::Orientation::Horizontal)
         .margin_top(8)
         .margin_bottom(4)
         .margin_start(8)
         .margin_end(6)
-        .spacing(4)
         .build();
-    sidebar_title.append(&search_btn);
-    sidebar_title.append(&sidebar_drag_area);
-    sidebar_title.append(&menu_btn);
+    sidebar_title.set_start_widget(Some(&search_btn));
+    sidebar_title.set_center_widget(Some(&sidebar_drag_area));
+    sidebar_title.set_end_widget(Some(&menu_btn));
 
     {
         let window = window.clone();
