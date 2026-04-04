@@ -15,6 +15,7 @@ use crate::layout_state::{
     self, AppSessionState, LayoutNodeState, LoadedSession, PaneState, SplitOrientation, SplitState,
     WorkspaceState,
 };
+use crate::notification_sound;
 use crate::pane::{self, PaneCallbacks};
 use crate::shortcut_config::{
     self, EditableCapturePolicy, ResolvedShortcutConfig, ShortcutCommand, ShortcutId,
@@ -4222,14 +4223,20 @@ fn workspace_notification_message(title: &str, body: &str) -> String {
 }
 
 fn mark_workspace_unread_with_message(state: &State, ws_id: &str, message: &str) {
-    let mut s = state.borrow_mut();
-    let active_idx = s.active_idx;
-    if let Some((idx, ws)) = s
-        .workspaces
-        .iter_mut()
-        .enumerate()
-        .find(|(_, w)| w.id == ws_id)
-    {
+    let sound = {
+        let mut s = state.borrow_mut();
+        let active_idx = s.active_idx;
+        let Some((idx, ws)) = s
+            .workspaces
+            .iter_mut()
+            .enumerate()
+            .find(|(_, w)| w.id == ws_id)
+        else {
+            return;
+        };
+
+        let should_play =
+            notification_sound::should_play_for_unread_transition(idx == active_idx, ws.unread);
         if idx != active_idx {
             ws.unread = true;
             ws.notify_dot.remove_css_class("limux-notify-dot-hidden");
@@ -4243,6 +4250,16 @@ fn mark_workspace_unread_with_message(state: &State, ws_id: &str, message: &str)
                 row_box.add_css_class("limux-sidebar-row-unread");
             }
         }
+
+        if should_play {
+            Some(s.config.borrow().notifications.sound.clone())
+        } else {
+            None
+        }
+    };
+
+    if let Some(sound) = sound {
+        notification_sound::play(&sound);
     }
 }
 

@@ -43,6 +43,8 @@ pub struct AppConfig {
     #[serde(skip)]
     pub appearance: AppearanceConfig,
     #[serde(default)]
+    pub notifications: NotificationsConfig,
+    #[serde(default)]
     pub workspace: WorkspaceConfig,
 }
 
@@ -62,6 +64,33 @@ pub struct FocusConfig {
 pub struct WorkspaceConfig {
     #[serde(default)]
     pub default_directory: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct NotificationsConfig {
+    #[serde(default)]
+    pub sound: NotificationSoundConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct NotificationSoundConfig {
+    #[serde(default = "default_notification_sound_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub custom_file: Option<String>,
+}
+
+impl Default for NotificationSoundConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_notification_sound_enabled(),
+            custom_file: None,
+        }
+    }
+}
+
+const fn default_notification_sound_enabled() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -142,7 +171,10 @@ fn parse_app_config_value(root: &Value) -> AppConfig {
         .unwrap_or(false);
 
     let appearance = root.get("appearance").and_then(Value::as_object);
+    let notifications = root.get("notifications").and_then(Value::as_object);
     let workspace = root.get("workspace").and_then(Value::as_object);
+    let notification_sound = notifications
+        .and_then(|notifications| notifications.get("sound").and_then(Value::as_object));
 
     let color_scheme = appearance
         .and_then(|appearance| appearance.get("color_scheme"))
@@ -163,6 +195,18 @@ fn parse_app_config_value(root: &Value) -> AppConfig {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
 
+    let custom_notification_sound_file = notification_sound
+        .and_then(|sound| sound.get("custom_file"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    let notification_sound_enabled = notification_sound
+        .and_then(|sound| sound.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(default_notification_sound_enabled);
+
     AppConfig {
         focus: FocusConfig {
             hover_terminal_focus,
@@ -170,6 +214,12 @@ fn parse_app_config_value(root: &Value) -> AppConfig {
         appearance: AppearanceConfig {
             color_scheme,
             ghostty_color_scheme,
+        },
+        notifications: NotificationsConfig {
+            sound: NotificationSoundConfig {
+                enabled: notification_sound_enabled,
+                custom_file: custom_notification_sound_file,
+            },
         },
         workspace: WorkspaceConfig { default_directory },
     }
@@ -198,6 +248,7 @@ fn save_to_path(path: &Path, config: &AppConfig) -> Result<(), String> {
         "focus".to_string(),
         json!({ "hover_terminal_focus": config.focus.hover_terminal_focus }),
     );
+    update_notification_sound_config(&mut root, &config.notifications.sound);
     if let Some(default_directory) = config
         .workspace
         .default_directory
@@ -216,6 +267,46 @@ fn save_to_path(path: &Path, config: &AppConfig) -> Result<(), String> {
     let serialized =
         serde_json::to_string_pretty(&Value::Object(root)).expect("config should serialize");
     write_config_root_atomically(path, &serialized)
+}
+
+fn update_notification_sound_config(
+    root: &mut serde_json::Map<String, Value>,
+    sound: &NotificationSoundConfig,
+) {
+    let custom_file = sound
+        .custom_file
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    let notifications_key = "notifications".to_string();
+    if sound.enabled == default_notification_sound_enabled() && custom_file.is_none() {
+        if let Some(Value::Object(mut notifications)) = root.remove(&notifications_key) {
+            notifications.remove("sound");
+            if !notifications.is_empty() {
+                root.insert(notifications_key, Value::Object(notifications));
+            }
+        }
+        return;
+    }
+
+    let mut notifications = root
+        .remove(&notifications_key)
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let mut sound_root = notifications
+        .remove("sound")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    sound_root.insert("enabled".to_string(), Value::Bool(sound.enabled));
+    if let Some(custom_file) = custom_file {
+        sound_root.insert("custom_file".to_string(), Value::String(custom_file));
+    } else {
+        sound_root.remove("custom_file");
+    }
+    notifications.insert("sound".to_string(), Value::Object(sound_root));
+    root.insert(notifications_key, Value::Object(notifications));
 }
 
 pub fn effective_workspace_default_directory(config: &AppConfig) -> Option<PathBuf> {
@@ -454,6 +545,35 @@ mod tests {
     }
 
     #[test]
+    fn load_from_path_reads_notification_sound_settings() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = settings_path_in(dir.path());
+        fs::create_dir_all(path.parent().expect("config dir")).expect("create config dir");
+        fs::write(
+            &path,
+            r#"{
+  "notifications": {
+    "sound": {
+      "enabled": false,
+      "custom_file": "/tmp/chime.oga"
+    }
+  }
+}
+"#,
+        )
+        .expect("write config");
+
+        let loaded = load_from_path(&path);
+
+        assert!(loaded.warnings.is_empty());
+        assert!(!loaded.config.notifications.sound.enabled);
+        assert_eq!(
+            loaded.config.notifications.sound.custom_file.as_deref(),
+            Some("/tmp/chime.oga")
+        );
+    }
+
+    #[test]
     fn load_from_path_defaults_ghostty_scheme_to_gtk_scheme_for_legacy_configs() {
         let dir = TempDir::new().expect("temp dir");
         let path = settings_path_in(dir.path());
@@ -522,6 +642,29 @@ mod tests {
     }
 
     #[test]
+    fn save_writes_notification_sound_settings_when_overridden() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = settings_path_in(dir.path());
+        fs::create_dir_all(path.parent().expect("config dir")).expect("create config dir");
+
+        let mut config = AppConfig::default();
+        config.notifications.sound.enabled = false;
+        config.notifications.sound.custom_file = Some("/tmp/chime.oga".to_string());
+        save_to_path(&path, &config).expect("save config");
+
+        let raw = fs::read_to_string(&path).expect("read config");
+        let parsed: Value = serde_json::from_str(&raw).expect("parse config");
+        assert_eq!(
+            parsed["notifications"]["sound"]["enabled"],
+            Value::Bool(false)
+        );
+        assert_eq!(
+            parsed["notifications"]["sound"]["custom_file"],
+            Value::String("/tmp/chime.oga".to_string())
+        );
+    }
+
+    #[test]
     fn save_preserves_unrelated_top_level_keys() {
         let dir = TempDir::new().expect("temp dir");
         let path = settings_path_in(dir.path());
@@ -554,6 +697,38 @@ mod tests {
     }
 
     #[test]
+    fn save_preserves_unrelated_notification_keys() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = settings_path_in(dir.path());
+        fs::create_dir_all(path.parent().expect("config dir")).expect("create config dir");
+        fs::write(
+            &path,
+            r#"{
+  "notifications": {
+    "keep": true,
+    "sound": {
+      "enabled": true
+    }
+  }
+}
+"#,
+        )
+        .expect("write config");
+
+        let mut config = AppConfig::default();
+        config.notifications.sound.custom_file = Some("/tmp/chime.oga".to_string());
+        save_to_path(&path, &config).expect("save config");
+
+        let raw = fs::read_to_string(&path).expect("read config");
+        let parsed: Value = serde_json::from_str(&raw).expect("parse config");
+        assert_eq!(parsed["notifications"]["keep"], Value::Bool(true));
+        assert_eq!(
+            parsed["notifications"]["sound"]["custom_file"],
+            Value::String("/tmp/chime.oga".to_string())
+        );
+    }
+
+    #[test]
     fn save_to_path_removes_workspace_section_when_default_directory_is_unset() {
         let dir = TempDir::new().expect("temp dir");
         let path = settings_path_in(dir.path());
@@ -575,6 +750,33 @@ mod tests {
         let raw = fs::read_to_string(&path).expect("read config");
         let parsed: Value = serde_json::from_str(&raw).expect("parse config");
         assert!(parsed.get("workspace").is_none());
+    }
+
+    #[test]
+    fn save_to_path_removes_notification_sound_section_when_defaults_are_used() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = settings_path_in(dir.path());
+        fs::create_dir_all(path.parent().expect("config dir")).expect("create config dir");
+        fs::write(
+            &path,
+            r#"{
+  "notifications": {
+    "sound": {
+      "enabled": false,
+      "custom_file": "/tmp/chime.oga"
+    }
+  }
+}
+"#,
+        )
+        .expect("write config");
+
+        let config = AppConfig::default();
+        save_to_path(&path, &config).expect("save config");
+
+        let raw = fs::read_to_string(&path).expect("read config");
+        let parsed: Value = serde_json::from_str(&raw).expect("parse config");
+        assert!(parsed.get("notifications").is_none());
     }
 
     #[test]

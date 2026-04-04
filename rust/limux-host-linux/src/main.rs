@@ -1,6 +1,7 @@
 mod app_config;
 mod keybind_editor;
 mod layout_state;
+mod notification_sound;
 mod open_path_dialog;
 mod pane;
 mod settings_editor;
