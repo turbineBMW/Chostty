@@ -75,6 +75,16 @@ pub enum PaneEmptyReason {
     MovedLastTabOut,
 }
 
+const HOST_ENTRY_CSS_CLASS: &str = "limux-host-entry";
+const TAB_RENAME_ENTRY_CSS_CLASS: &str = "limux-tab-rename-entry";
+const TAB_RENAME_ENTRY_CSS_CLASSES: [&str; 2] = [HOST_ENTRY_CSS_CLASS, TAB_RENAME_ENTRY_CSS_CLASS];
+const BROWSER_URL_ENTRY_CSS_CLASS: &str = "limux-browser-url-entry";
+const BROWSER_URL_ENTRY_CSS_CLASSES: [&str; 2] =
+    [HOST_ENTRY_CSS_CLASS, BROWSER_URL_ENTRY_CSS_CLASS];
+const BROWSER_SEARCH_ENTRY_CSS_CLASS: &str = "limux-browser-search-entry";
+const BROWSER_SEARCH_ENTRY_CSS_CLASSES: [&str; 2] =
+    [HOST_ENTRY_CSS_CLASS, BROWSER_SEARCH_ENTRY_CSS_CLASS];
+
 pub fn is_tab_dragging() -> bool {
     TAB_DRAGGING.with(|value| value.get())
 }
@@ -147,6 +157,7 @@ type PanePathCallback = dyn Fn(&str);
 type PaneDesktopNotificationCallback = dyn Fn(&str, &str);
 type PaneEmptyCallback = dyn Fn(&gtk::Widget, PaneEmptyReason);
 type PaneConfirmLastTabCloseCallback = dyn Fn(&gtk::Widget, PaneEmptyReason, Rc<dyn Fn(bool)>);
+type PaneOpenBrowserHereCallback = dyn Fn(&gtk::Widget);
 type PaneShortcutStateCallback = dyn Fn() -> Rc<ResolvedShortcutConfig>;
 type PaneShortcutCaptureCallback =
     dyn Fn(ShortcutId, Option<NormalizedShortcut>) -> Result<ResolvedShortcutConfig, String>;
@@ -159,6 +170,7 @@ pub struct PaneCallbacks {
     pub on_desktop_notification: Box<PaneDesktopNotificationCallback>,
     pub on_new_terminal_tab: Box<PaneWidgetCallback>,
     pub on_new_browser_tab: Box<PaneWidgetCallback>,
+    pub on_open_browser_here: Box<PaneOpenBrowserHereCallback>,
     pub on_open_keybinds: Box<PaneWidgetCallback>,
     pub current_shortcuts: Box<PaneShortcutStateCallback>,
     pub on_capture_shortcut: Rc<PaneShortcutCaptureCallback>,
@@ -353,6 +365,14 @@ pub const PANE_CSS: &str = r#"
     min-height: 0;
     font-size: 12px;
 }
+.limux-browser-url-entry {
+    min-height: 0;
+    font-size: 12px;
+}
+.limux-browser-search-entry {
+    min-height: 0;
+    font-size: 12px;
+}
 .limux-tab-drop-indicator {
     background-color: @accent_bg_color;
     min-width: 2px;
@@ -447,7 +467,6 @@ pub fn create_pane(
     content_drop_overlay.set_visible(false);
     content_drop_overlay.set_can_target(false);
     content_overlay.add_overlay(&content_drop_overlay);
-
     header.append(&tab_overlay);
     header.append(&pane_menu_btn);
 
@@ -483,7 +502,6 @@ pub fn create_pane(
     } else if !skip_default_tab {
         add_terminal_tab_inner(&internals, working_directory, None);
     }
-
     install_tab_strip_drop_target(&tab_overlay, &internals);
     install_content_drop_target(&internals);
 
@@ -582,6 +600,45 @@ pub fn focus_active_tab_in_pane(pane_widget: &gtk::Widget) -> bool {
         &tab_id,
     );
     true
+}
+
+fn normalize_surface_hint(raw: &str) -> &str {
+    raw.trim()
+        .strip_prefix("surface:")
+        .unwrap_or_else(|| raw.trim())
+}
+
+pub fn terminal_handle_for_surface(
+    pane_widget: &gtk::Widget,
+    surface_hint: Option<&str>,
+) -> Option<(String, terminal::TerminalHandle)> {
+    let internals = find_pane_internals(pane_widget)?;
+    let tab_state = internals.tab_state.borrow();
+    let requested = surface_hint
+        .map(normalize_surface_hint)
+        .filter(|value| !value.is_empty());
+    let active_tab = tab_state.active_tab.as_deref();
+    let mut fallback = None;
+
+    for entry in &tab_state.tabs {
+        let TabKind::Terminal { state } = &entry.kind else {
+            continue;
+        };
+
+        if requested == Some(entry.id.as_str()) {
+            return Some((entry.id.clone(), state.handle.clone()));
+        }
+
+        if active_tab == Some(entry.id.as_str()) {
+            return Some((entry.id.clone(), state.handle.clone()));
+        }
+
+        if fallback.is_none() {
+            fallback = Some((entry.id.clone(), state.handle.clone()));
+        }
+    }
+
+    fallback
 }
 
 // ---------------------------------------------------------------------------
@@ -905,6 +962,7 @@ fn make_terminal_callbacks(
     let callbacks_for_bell = internals.callbacks.clone();
     let callbacks_for_pwd = internals.callbacks.clone();
     let callbacks_for_close = internals.callbacks.clone();
+    let callbacks_for_browser_here = internals.callbacks.clone();
     let callbacks_for_split_right = internals.callbacks.clone();
     let callbacks_for_split_down = internals.callbacks.clone();
     let callbacks_for_keybinds = internals.callbacks.clone();
@@ -964,6 +1022,13 @@ fn make_terminal_callbacks(
                     PaneEmptyReason::ClosedLastTab,
                 );
             });
+        }),
+        on_open_browser_here: Box::new({
+            let pane_outer = internals.pane_outer.clone();
+            move || {
+                let pane_widget: gtk::Widget = pane_outer.clone().upcast();
+                (callbacks_for_browser_here.on_open_browser_here)(&pane_widget);
+            }
         }),
         on_split_right: Box::new({
             let pane_outer = internals.pane_outer.clone();
@@ -1341,6 +1406,22 @@ fn find_pane_internals(pane_widget: &gtk::Widget) -> Option<Rc<PaneInternals>> {
             .data::<Rc<PaneInternals>>("limux-pane-internals")
             .map(|ptr| ptr.as_ref().clone())
     }
+}
+
+pub fn is_pane_widget(widget: &gtk::Widget) -> bool {
+    let Some(container) = widget.downcast_ref::<gtk::Box>() else {
+        return false;
+    };
+
+    let mut child = container.first_child();
+    while let Some(current) = child {
+        if current.has_css_class("limux-pane-header") {
+            return true;
+        }
+        child = current.next_sibling();
+    }
+
+    false
 }
 
 pub fn tab_title(pane_widget: &gtk::Widget, tab_id: &str) -> Option<String> {
@@ -1744,7 +1825,9 @@ fn show_rename_dialog(
         .text(&current_name)
         .width_chars(15)
         .build();
-    entry.add_css_class("limux-tab-rename-entry");
+    for css_class in TAB_RENAME_ENTRY_CSS_CLASSES {
+        entry.add_css_class(css_class);
+    }
 
     label.set_visible(false);
     // Insert entry before the close button
@@ -2809,6 +2892,9 @@ fn create_browser_widget(
         .placeholder_text("Enter URL...")
         .hexpand(true)
         .build();
+    for css_class in BROWSER_URL_ENTRY_CSS_CLASSES {
+        url_entry.add_css_class(css_class);
+    }
 
     let back_btn = icon_button("go-previous-symbolic", "Back");
     let fwd_btn = icon_button("go-next-symbolic", "Forward");
@@ -2842,14 +2928,7 @@ fn create_browser_widget(
     {
         let wv = webview.clone();
         url_entry.connect_activate(move |entry| {
-            let mut url = entry.text().to_string();
-            if !url.starts_with("http://") && !url.starts_with("https://") {
-                if url.contains('.') {
-                    url = format!("https://{url}");
-                } else {
-                    url = format!("https://www.google.com/search?q={}", url.replace(' ', "+"));
-                }
-            }
+            let url = normalize_browser_entry_input(&entry.text());
             wv.load_uri(&url);
         });
     }
@@ -2880,11 +2959,13 @@ fn create_browser_widget(
         .hexpand(true)
         .placeholder_text("Find in page")
         .build();
+    for css_class in BROWSER_SEARCH_ENTRY_CSS_CLASSES {
+        search_entry.add_css_class(css_class);
+    }
     let search_bar = gtk::SearchBar::new();
     search_bar.set_show_close_button(true);
     search_bar.connect_entry(&search_entry);
     search_bar.set_child(Some(&search_entry));
-    search_bar.set_key_capture_widget(Some(&webview));
     {
         let search_bar = search_bar.clone();
         let find_controller = find_controller.clone();
@@ -2951,6 +3032,31 @@ fn create_browser_widget(
     (vbox.upcast(), "Browser".to_string(), browser_handles)
 }
 
+fn normalize_browser_entry_input(input: &str) -> String {
+    if input.starts_with("http://") || input.starts_with("https://") {
+        return input.to_string();
+    }
+
+    if is_localhost_input(input) {
+        format!("http://{input}")
+    } else if input.contains('.') {
+        format!("https://{input}")
+    } else {
+        format!(
+            "https://www.google.com/search?q={}",
+            input.replace(' ', "+")
+        )
+    }
+}
+
+fn is_localhost_input(input: &str) -> bool {
+    input == "localhost"
+        || input
+            .strip_prefix("localhost")
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|ch| matches!(ch, ':' | '/' | '?' | '#'))
+}
+
 #[cfg(not(feature = "webkit"))]
 fn create_browser_widget(
     initial_uri: Option<&str>,
@@ -2990,8 +3096,11 @@ fn create_browser_widget(
 mod tests {
     use super::{
         classify_content_drop_zone, content_drop_preview_rect, effective_drop_target_dimensions,
-        next_active_after_tab_removal, normalize_reorder_insert_index, pane_action_tooltip,
-        ContentDropZone, TabDragPayload,
+        is_localhost_input, next_active_after_tab_removal, normalize_browser_entry_input,
+        normalize_reorder_insert_index, pane_action_tooltip, ContentDropZone, TabDragPayload,
+        BROWSER_SEARCH_ENTRY_CSS_CLASS, BROWSER_SEARCH_ENTRY_CSS_CLASSES,
+        BROWSER_URL_ENTRY_CSS_CLASS, BROWSER_URL_ENTRY_CSS_CLASSES, HOST_ENTRY_CSS_CLASS, PANE_CSS,
+        TAB_RENAME_ENTRY_CSS_CLASS, TAB_RENAME_ENTRY_CSS_CLASSES,
     };
     use crate::shortcut_config::{default_shortcuts, resolve_shortcuts_from_str, ShortcutId};
 
@@ -3031,6 +3140,30 @@ mod tests {
         assert_eq!(
             pane_action_tooltip(&unbound, "Close pane", None),
             "Close pane"
+        );
+    }
+
+    #[test]
+    fn pane_css_keeps_entry_layout_classes_separate_from_shared_theme() {
+        assert!(PANE_CSS.contains(".limux-tab-rename-entry"));
+        assert!(PANE_CSS.contains(".limux-browser-url-entry"));
+        assert!(PANE_CSS.contains(".limux-browser-search-entry"));
+        assert!(!PANE_CSS.contains("border: 1px solid rgba(0, 145, 255, 0.5);"));
+    }
+
+    #[test]
+    fn pane_entries_use_shared_host_entry_class() {
+        assert_eq!(
+            TAB_RENAME_ENTRY_CSS_CLASSES,
+            [HOST_ENTRY_CSS_CLASS, TAB_RENAME_ENTRY_CSS_CLASS]
+        );
+        assert_eq!(
+            BROWSER_URL_ENTRY_CSS_CLASSES,
+            [HOST_ENTRY_CSS_CLASS, BROWSER_URL_ENTRY_CSS_CLASS]
+        );
+        assert_eq!(
+            BROWSER_SEARCH_ENTRY_CSS_CLASSES,
+            [HOST_ENTRY_CSS_CLASS, BROWSER_SEARCH_ENTRY_CSS_CLASS]
         );
     }
 
@@ -3158,5 +3291,54 @@ mod tests {
             Some((320.0, 180.0))
         );
         assert_eq!(effective_drop_target_dimensions(0, 0, 0, 180), None);
+    }
+
+    #[test]
+    fn localhost_inputs_only_match_real_localhost_hosts() {
+        for input in [
+            "localhost",
+            "localhost:3000",
+            "localhost/path",
+            "localhost?q=1",
+        ] {
+            assert!(is_localhost_input(input), "{input} should be localhost");
+        }
+
+        for input in [
+            "localhost.run",
+            "localhost.example.com",
+            "localhost docs",
+            "mylocalhost:3000",
+        ] {
+            assert!(
+                !is_localhost_input(input),
+                "{input} should not be treated as localhost"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_browser_entry_input_preserves_search_and_domain_behavior() {
+        let cases = [
+            ("https://example.com", "https://example.com"),
+            ("localhost", "http://localhost"),
+            ("localhost:3000", "http://localhost:3000"),
+            ("localhost/path", "http://localhost/path"),
+            ("localhost.run", "https://localhost.run"),
+            ("localhost.example.com", "https://localhost.example.com"),
+            (
+                "localhost docs",
+                "https://www.google.com/search?q=localhost+docs",
+            ),
+            ("example.com", "https://example.com"),
+            (
+                "example search",
+                "https://www.google.com/search?q=example+search",
+            ),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(normalize_browser_entry_input(input), expected, "{input}");
+        }
     }
 }

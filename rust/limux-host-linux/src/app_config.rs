@@ -206,7 +206,6 @@ fn parse_app_config_value(root: &Value) -> AppConfig {
         .and_then(|sound| sound.get("enabled"))
         .and_then(Value::as_bool)
         .unwrap_or_else(default_notification_sound_enabled);
-
     AppConfig {
         focus: FocusConfig {
             hover_terminal_focus,
@@ -320,7 +319,6 @@ pub fn effective_workspace_default_directory(config: &AppConfig) -> Option<PathB
         .filter(|path| path.is_dir())
         .or_else(dirs::home_dir)
 }
-
 fn read_existing_config_root_for_save(
     path: &Path,
 ) -> Result<serde_json::Map<String, Value>, String> {

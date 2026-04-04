@@ -10,7 +10,7 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::os::unix::ffi::OsStringExt;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -22,6 +22,7 @@ use limux_ghostty_sys::*;
 
 struct GhosttyState {
     app: ghostty_app_t,
+    background_opacity: f64,
 }
 
 // Safety: ghostty_app_t is thread-safe for the operations we perform
@@ -30,6 +31,7 @@ unsafe impl Sync for GhosttyState {}
 
 static GHOSTTY: OnceLock<GhosttyState> = OnceLock::new();
 static CURRENT_COLOR_SCHEME: AtomicI32 = AtomicI32::new(GHOSTTY_COLOR_SCHEME_LIGHT);
+static WAKEUP_IDLE_QUEUED: AtomicBool = AtomicBool::new(false);
 
 type TitleChangedCallback = dyn Fn(&str);
 type PwdChangedCallback = dyn Fn(&str);
@@ -51,6 +53,92 @@ struct SurfaceEntry {
 
 struct ClipboardContext {
     surface: Cell<ghostty_surface_t>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ImeKeyEventPhase {
+    #[default]
+    Idle,
+    NotComposing,
+    Composing,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct TerminalImeState {
+    composing: bool,
+    key_event_phase: ImeKeyEventPhase,
+    pending_key_text: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ImeCommitOutcome {
+    BufferForKeyEvent,
+    CommitDirectly(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImeFilterOutcome {
+    ForwardToGhostty,
+    ConsumeForIme,
+}
+
+impl TerminalImeState {
+    fn begin_key_event(&mut self) {
+        self.key_event_phase = if self.composing {
+            ImeKeyEventPhase::Composing
+        } else {
+            ImeKeyEventPhase::NotComposing
+        };
+        self.pending_key_text = None;
+    }
+
+    fn finish_key_event(&mut self) {
+        self.key_event_phase = ImeKeyEventPhase::Idle;
+        self.pending_key_text = None;
+    }
+
+    fn preedit_changed(&mut self) {
+        self.composing = true;
+    }
+
+    fn preedit_ended(&mut self) {
+        self.composing = false;
+    }
+
+    fn commit_text(&mut self, text: &str) -> ImeCommitOutcome {
+        match self.key_event_phase {
+            ImeKeyEventPhase::Idle | ImeKeyEventPhase::Composing => {
+                self.composing = false;
+                ImeCommitOutcome::CommitDirectly(text.to_string())
+            }
+            ImeKeyEventPhase::NotComposing => {
+                self.pending_key_text = Some(text.to_string());
+                ImeCommitOutcome::BufferForKeyEvent
+            }
+        }
+    }
+
+    fn filter_outcome(&self, im_handled: bool) -> ImeFilterOutcome {
+        if !im_handled {
+            return ImeFilterOutcome::ForwardToGhostty;
+        }
+
+        if self.composing
+            || self.key_event_phase == ImeKeyEventPhase::Composing
+            || self.pending_key_text.is_none()
+        {
+            ImeFilterOutcome::ConsumeForIme
+        } else {
+            ImeFilterOutcome::ForwardToGhostty
+        }
+    }
+
+    fn take_event_text(&mut self, fallback: Option<CString>) -> Option<CString> {
+        match self.pending_key_text.take() {
+            Some(text) => CString::new(text).ok(),
+            None => fallback,
+        }
+    }
 }
 
 thread_local! {
@@ -75,6 +163,17 @@ impl TerminalHandle {
         let surface = *self.surface_cell.borrow();
         surface_action(surface, action);
         surface.is_some()
+    }
+
+    /// Inject text into the terminal surface for control-socket requests and
+    /// drag/drop payloads. Ghostty treats this as pasted text, which matches
+    /// the current control protocol semantics.
+    pub fn send_text(&self, text: &str) {
+        if let Some(surface) = *self.surface_cell.borrow() {
+            unsafe {
+                ghostty_surface_text(surface, text.as_ptr() as *const c_char, text.len());
+            }
+        }
     }
 
     pub fn show_find(&self) -> bool {
@@ -171,6 +270,66 @@ fn request_terminal_focus(gl_area: &gtk::GLArea, had_focus: &Cell<bool>) {
     gl_area.grab_focus();
 }
 
+fn clear_ghostty_preedit(surface: ghostty_surface_t) {
+    unsafe { ghostty_surface_preedit(surface, ptr::null(), 0) };
+}
+
+fn update_ime_cursor_location(surface: ghostty_surface_t, im_context: &gtk::IMMulticontext) {
+    let mut x = 0.0;
+    let mut y = 0.0;
+    let mut width = 1.0;
+    let mut height = 1.0;
+    unsafe {
+        ghostty_surface_ime_point(surface, &mut x, &mut y, &mut width, &mut height);
+    }
+    im_context.set_cursor_location(&gtk::gdk::Rectangle::new(
+        x.round() as i32,
+        y.round() as i32,
+        width.max(1.0).round() as i32,
+        height.max(1.0).round() as i32,
+    ));
+}
+
+fn update_ghostty_preedit(
+    surface_cell: &Rc<RefCell<Option<ghostty_surface_t>>>,
+    im_context: &gtk::IMMulticontext,
+) {
+    let Some(surface) = *surface_cell.borrow() else {
+        return;
+    };
+
+    let (preedit, _, cursor_pos) = im_context.preedit_string();
+    if preedit.is_empty() {
+        clear_ghostty_preedit(surface);
+        return;
+    }
+
+    if let Ok(text) = CString::new(preedit.as_str()) {
+        unsafe {
+            ghostty_surface_preedit(surface, text.as_ptr(), cursor_pos.max(0) as usize);
+        }
+    }
+}
+
+fn send_committed_text(surface: ghostty_surface_t, text: &str) {
+    let Ok(c_text) = CString::new(text) else {
+        return;
+    };
+
+    let event = ghostty_input_key_s {
+        action: GHOSTTY_ACTION_PRESS,
+        mods: GHOSTTY_MODS_NONE,
+        consumed_mods: GHOSTTY_MODS_NONE,
+        keycode: 0,
+        text: c_text.as_ptr(),
+        unshifted_codepoint: 0,
+        composing: false,
+    };
+
+    unsafe {
+        ghostty_surface_key(surface, event);
+    }
+}
 fn load_ghostty_config() -> ghostty_config_t {
     unsafe {
         let config = ghostty_config_new();
@@ -189,6 +348,7 @@ pub fn init_ghostty() {
         }
 
         let config = load_ghostty_config();
+        let background_opacity = load_background_opacity(config);
 
         let runtime_config = ghostty_runtime_config_s {
             userdata: ptr::null_mut(),
@@ -214,12 +374,42 @@ pub fn init_ghostty() {
             glib::ControlFlow::Continue
         });
 
-        GhosttyState { app }
+        GhosttyState {
+            app,
+            background_opacity,
+        }
     });
 }
 
 fn ghostty_app() -> ghostty_app_t {
     GHOSTTY.get().expect("ghostty not initialized").app
+}
+
+pub fn ghostty_background_opacity() -> f64 {
+    init_ghostty();
+    GHOSTTY
+        .get()
+        .map(|state| state.background_opacity)
+        .unwrap_or(1.0)
+}
+
+fn load_background_opacity(config: ghostty_config_t) -> f64 {
+    let mut opacity = 1.0_f64;
+    let key = b"background-opacity";
+    let loaded = unsafe {
+        ghostty_config_get(
+            config,
+            (&mut opacity as *mut f64).cast::<c_void>(),
+            key.as_ptr().cast::<c_char>(),
+            key.len(),
+        )
+    };
+
+    if loaded && opacity.is_finite() {
+        opacity.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
 }
 
 fn ghostty_color_scheme_for_dark_mode(dark: bool) -> c_int {
@@ -257,11 +447,25 @@ pub fn sync_color_scheme(dark: bool) {
 // Runtime callbacks (C ABI)
 // ---------------------------------------------------------------------------
 
+fn claim_wakeup_idle_slot(flag: &AtomicBool) -> bool {
+    !flag.swap(true, Ordering::AcqRel)
+}
+
+fn release_wakeup_idle_slot(flag: &AtomicBool) {
+    flag.store(false, Ordering::Release);
+}
+
 unsafe extern "C" fn ghostty_wakeup_cb(_userdata: *mut c_void) {
-    glib::idle_add_once(|| {
-        let app = ghostty_app();
-        unsafe { ghostty_app_tick(app) };
-    });
+    // Collapse renderer wakeups to a single pending idle source so text floods
+    // do not enqueue unbounded GTK callbacks on the main thread.
+    if claim_wakeup_idle_slot(&WAKEUP_IDLE_QUEUED) {
+        glib::idle_add_once(|| {
+            release_wakeup_idle_slot(&WAKEUP_IDLE_QUEUED);
+            let app = ghostty_app();
+            unsafe { ghostty_app_tick(app) };
+        });
+    }
+    glib::MainContext::default().wakeup();
 }
 
 unsafe extern "C" fn ghostty_action_cb(
@@ -597,6 +801,7 @@ pub struct TerminalCallbacks {
     pub on_desktop_notification: Box<DesktopNotificationCallback>,
     pub on_bell: Box<VoidCallback>,
     pub on_close: Box<VoidCallback>,
+    pub on_open_browser_here: Box<VoidCallback>,
     pub on_split_right: Box<VoidCallback>,
     pub on_split_down: Box<VoidCallback>,
     pub on_open_keybinds: Box<WidgetCallback>,
@@ -623,6 +828,9 @@ pub fn create_terminal(
     gl_area.set_auto_render(true);
     gl_area.set_focusable(true);
     gl_area.set_can_focus(true);
+    gl_area.connect_map(|gl_area| {
+        gl_area.queue_render();
+    });
 
     let wd = working_directory.map(|s| s.to_string());
     let hover_focus = options.hover_focus;
@@ -647,13 +855,17 @@ pub fn create_terminal(
     search_bar.set_show_close_button(true);
     search_bar.connect_entry(&search_entry);
     search_bar.set_child(Some(&search_entry));
-    search_bar.set_key_capture_widget(Some(&gl_area));
     search_bar.set_valign(gtk::Align::Start);
     search_bar.set_halign(gtk::Align::Fill);
     search_bar.set_margin_top(8);
     search_bar.set_margin_start(8);
     search_bar.set_margin_end(8);
     overlay.add_overlay(&search_bar);
+
+    let im_context = gtk::IMMulticontext::new();
+    im_context.set_client_widget(Some(&gl_area));
+    im_context.set_use_preedit(true);
+    let ime_state = Rc::new(RefCell::new(TerminalImeState::default()));
 
     let handle = TerminalHandle {
         surface_cell: surface_cell.clone(),
@@ -673,6 +885,44 @@ pub fn create_terminal(
         let handle = handle.clone();
         search_entry.connect_stop_search(move |_| {
             handle.hide_find();
+        });
+    }
+    {
+        let surface_cell = surface_cell.clone();
+        let im_context = im_context.clone();
+        let im_context_for_signal = im_context.clone();
+        let ime_state = ime_state.clone();
+        im_context_for_signal.connect_preedit_changed(move |_| {
+            ime_state.borrow_mut().preedit_changed();
+            update_ghostty_preedit(&surface_cell, &im_context);
+        });
+    }
+    {
+        let surface_cell = surface_cell.clone();
+        let ime_state = ime_state.clone();
+        im_context.connect_preedit_end(move |_| {
+            ime_state.borrow_mut().preedit_ended();
+            let Some(surface) = *surface_cell.borrow() else {
+                return;
+            };
+            clear_ghostty_preedit(surface);
+        });
+    }
+    {
+        let surface_cell = surface_cell.clone();
+        let ime_state = ime_state.clone();
+        im_context.connect_commit(move |_, text| {
+            let Some(surface) = *surface_cell.borrow() else {
+                return;
+            };
+
+            match ime_state.borrow_mut().commit_text(text) {
+                ImeCommitOutcome::BufferForKeyEvent => {}
+                ImeCommitOutcome::CommitDirectly(text) => {
+                    clear_ghostty_preedit(surface);
+                    send_committed_text(surface, &text);
+                }
+            }
         });
     }
 
@@ -858,15 +1108,36 @@ pub fn create_terminal(
     {
         let sc_press = surface_cell.clone();
         let sc_release = surface_cell.clone();
+        let im_context_press = im_context.clone();
+        let im_context_release = im_context.clone();
+        let ime_state_press = ime_state.clone();
+        let ime_state_release = ime_state.clone();
         let key_controller = gtk::EventControllerKey::new();
         key_controller.connect_key_pressed(move |ctrl, keyval, keycode, modifier| {
             if let Some(surface) = *sc_press.borrow() {
-                let c_text = key_event_text(keyval);
-
                 let current_event = ctrl
                     .current_event()
                     .and_then(|event| event.downcast::<gtk::gdk::KeyEvent>().ok());
                 let widget = ctrl.widget();
+                let fallback_text = key_event_text(keyval);
+
+                if let Some(current_event) = current_event.as_ref() {
+                    {
+                        let mut ime_state = ime_state_press.borrow_mut();
+                        ime_state.begin_key_event();
+                    }
+
+                    update_ime_cursor_location(surface, &im_context_press);
+                    let im_handled = im_context_press.filter_keypress(current_event);
+                    let filter_outcome = {
+                        let ime_state = ime_state_press.borrow();
+                        ime_state.filter_outcome(im_handled)
+                    };
+                    if filter_outcome == ImeFilterOutcome::ConsumeForIme {
+                        ime_state_press.borrow_mut().finish_key_event();
+                        return glib::Propagation::Stop;
+                    }
+                }
 
                 let mut event = translate_key_event(
                     GHOSTTY_ACTION_PRESS,
@@ -876,11 +1147,17 @@ pub fn create_terminal(
                     keycode,
                     modifier,
                 );
+                let c_text = ime_state_press.borrow_mut().take_event_text(fallback_text);
                 if let Some(ref ct) = c_text {
                     event.text = ct.as_ptr();
                 }
 
                 let consumed = unsafe { ghostty_surface_key(surface, event) };
+                if consumed && ime_state_press.borrow().composing {
+                    im_context_press.reset();
+                    clear_ghostty_preedit(surface);
+                }
+                ime_state_press.borrow_mut().finish_key_event();
                 if consumed {
                     return glib::Propagation::Stop;
                 }
@@ -894,6 +1171,25 @@ pub fn create_terminal(
                     .current_event()
                     .and_then(|event| event.downcast::<gtk::gdk::KeyEvent>().ok());
                 let widget = ctrl.widget();
+
+                if let Some(current_event) = current_event.as_ref() {
+                    {
+                        let mut ime_state = ime_state_release.borrow_mut();
+                        ime_state.begin_key_event();
+                    }
+
+                    update_ime_cursor_location(surface, &im_context_release);
+                    let im_handled = im_context_release.filter_keypress(current_event);
+                    let filter_outcome = {
+                        let ime_state = ime_state_release.borrow();
+                        ime_state.filter_outcome(im_handled)
+                    };
+                    if filter_outcome == ImeFilterOutcome::ConsumeForIme {
+                        ime_state_release.borrow_mut().finish_key_event();
+                        return;
+                    }
+                }
+
                 let event = translate_key_event(
                     GHOSTTY_ACTION_RELEASE,
                     widget.as_ref(),
@@ -903,6 +1199,7 @@ pub fn create_terminal(
                     modifier,
                 );
                 unsafe { ghostty_surface_key(surface, event) };
+                ime_state_release.borrow_mut().finish_key_event();
             }
         });
 
@@ -1027,16 +1324,20 @@ pub fn create_terminal(
         let surface_cell = surface_cell.clone();
         let had_focus_enter = had_focus.clone();
         let had_focus_leave = had_focus.clone();
+        let im_context_enter = im_context.clone();
+        let im_context_leave = im_context.clone();
         let focus_ctrl = gtk::EventControllerFocus::new();
         let sc = surface_cell.clone();
         focus_ctrl.connect_enter(move |_| {
             had_focus_enter.set(true);
+            im_context_enter.focus_in();
             if let Some(surface) = *sc.borrow() {
                 unsafe { ghostty_surface_set_focus(surface, true) };
             }
         });
         focus_ctrl.connect_leave(move |_| {
             had_focus_leave.set(false);
+            im_context_leave.focus_out();
             if let Some(surface) = *surface_cell.borrow() {
                 unsafe { ghostty_surface_set_focus(surface, false) };
             }
@@ -1089,7 +1390,9 @@ pub fn create_terminal(
     {
         let surface_cell = surface_cell.clone();
         let clipboard_context_cell = clipboard_context_cell.clone();
+        let im_context = im_context.clone();
         overlay.connect_destroy(move |_| {
+            im_context.set_client_widget(gtk::Widget::NONE);
             if let Some(surface) = surface_cell.borrow_mut().take() {
                 let surface_key = surface as usize;
                 SURFACE_MAP.with(|map| {
@@ -1147,6 +1450,7 @@ fn show_terminal_context_menu(
         ("Copy", has_selection),
         ("Paste", true),
         ("---", false),
+        ("Browser", true),
         ("Split Right", true),
         ("Split Down", true),
         ("Keybinds", true),
@@ -1193,6 +1497,10 @@ fn show_terminal_context_menu(
                 match label.as_str() {
                     "Copy" => surface_action(surface, "copy_to_clipboard"),
                     "Paste" => surface_action(surface, "paste_from_clipboard"),
+                    "Browser" => {
+                        let callbacks = cb.borrow();
+                        (callbacks.on_open_browser_here)();
+                    }
                     "Split Right" => {
                         let callbacks = cb.borrow();
                         (callbacks.on_split_right)();
@@ -1517,6 +1825,55 @@ mod tests {
     }
 
     #[test]
+    fn ime_state_consumes_composing_key_events() {
+        let mut state = TerminalImeState::default();
+        state.preedit_changed();
+        state.begin_key_event();
+
+        assert_eq!(state.filter_outcome(true), ImeFilterOutcome::ConsumeForIme);
+
+        state.finish_key_event();
+        assert_eq!(state.key_event_phase, ImeKeyEventPhase::Idle);
+    }
+
+    #[test]
+    fn ime_state_buffers_plain_commit_for_key_event_text() {
+        let mut state = TerminalImeState::default();
+        state.begin_key_event();
+
+        assert_eq!(state.commit_text("a"), ImeCommitOutcome::BufferForKeyEvent);
+        assert_eq!(
+            state.filter_outcome(true),
+            ImeFilterOutcome::ForwardToGhostty
+        );
+
+        let text = state
+            .take_event_text(None)
+            .and_then(|text| text.into_string().ok());
+        assert_eq!(text.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn ime_state_commits_composed_text_outside_key_event() {
+        let mut state = TerminalImeState::default();
+        state.preedit_changed();
+
+        assert_eq!(
+            state.commit_text("á"),
+            ImeCommitOutcome::CommitDirectly("á".to_string())
+        );
+        assert!(!state.composing);
+    }
+
+    #[test]
+    fn ime_state_consumes_handled_events_without_text() {
+        let mut state = TerminalImeState::default();
+        state.begin_key_event();
+
+        assert_eq!(state.filter_outcome(true), ImeFilterOutcome::ConsumeForIme);
+    }
+
+    #[test]
     fn shell_escape_preserves_simple_paths() {
         assert_eq!(
             shell_escape_bytes(b"/home/user/file.txt"),
@@ -1588,5 +1945,17 @@ mod tests {
     #[test]
     fn shell_escape_joined_bytes_rejects_empty_input() {
         assert!(shell_escape_joined_bytes(std::iter::empty::<&[u8]>()).is_none());
+    }
+
+    #[test]
+    fn wakeup_idle_slot_coalesces_until_released() {
+        let flag = AtomicBool::new(false);
+
+        assert!(claim_wakeup_idle_slot(&flag));
+        assert!(!claim_wakeup_idle_slot(&flag));
+
+        release_wakeup_idle_slot(&flag);
+
+        assert!(claim_wakeup_idle_slot(&flag));
     }
 }

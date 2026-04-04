@@ -252,7 +252,6 @@ fn build_general_page(window: &adw::Window, input: &SettingsEditorInput) -> gtk:
     workspace_row.add_suffix(&workspace_clear_button);
     workspace_row.set_activatable_widget(Some(&workspace_entry));
     group.add(&workspace_row);
-
     page.add(&group);
 
     {
@@ -631,7 +630,6 @@ fn expand_settings_path(input: &str) -> Option<PathBuf> {
         dirs::home_dir().map(|home| home.join(path))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -652,7 +650,6 @@ mod tests {
 
         assert!(config.borrow().focus.hover_terminal_focus);
     }
-
     #[test]
     fn normalize_workspace_default_directory_input_expands_home_relative_paths() {
         let home = dirs::home_dir().expect("home dir");
