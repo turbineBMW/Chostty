@@ -9,15 +9,15 @@ ARCH="$(uname -m)"
 DEB_ARCH="amd64"
 [ "$ARCH" = "aarch64" ] && DEB_ARCH="arm64"
 
-PKG_BASE="limux-${VERSION}-linux-${ARCH}"
-STAGE="/tmp/limux-staging"
+PKG_BASE="chostty-${VERSION}-linux-${ARCH}"
+STAGE="/tmp/chostty-staging"
 GHOSTTY_SO="${ROOT_DIR}/ghostty/zig-out/lib/libghostty.so"
 GHOSTTY_SHARE_DIR=""
 GHOSTTY_TERMINFO_DIR=""
-ICONS_DIR="${ROOT_DIR}/rust/limux-host-linux/icons"
-APP_ICONS_DIR="${ROOT_DIR}/rust/limux-host-linux/icons/app"
-DESKTOP_FILE="${ROOT_DIR}/rust/limux-host-linux/dev.limux.linux.desktop"
-METADATA_FILE="${ROOT_DIR}/rust/limux-host-linux/dev.limux.linux.metainfo.xml"
+ICONS_DIR="${ROOT_DIR}/rust/chostty-host-linux/icons"
+APP_ICONS_DIR="${ROOT_DIR}/rust/chostty-host-linux/icons/app"
+DESKTOP_FILE="${ROOT_DIR}/rust/chostty-host-linux/dev.turbinebmw.chostty.desktop"
+METADATA_FILE="${ROOT_DIR}/rust/chostty-host-linux/dev.turbinebmw.chostty.metainfo.xml"
 OUT_DIR="${ROOT_DIR}/dist"
 
 remove_tree() {
@@ -84,7 +84,7 @@ copy_ghostty_terminfo_entries() {
     fi
 }
 
-echo "=== Limux Packager ==="
+echo "=== Chostty Packager ==="
 echo "Version: ${VERSION}"
 echo "Arch:    ${ARCH}"
 
@@ -132,7 +132,7 @@ fi
 echo "Building release binary..."
 cargo build --release --manifest-path "${ROOT_DIR}/Cargo.toml"
 
-BINARY="${ROOT_DIR}/target/release/limux"
+BINARY="${ROOT_DIR}/target/release/chostty"
 if [ ! -f "$BINARY" ]; then
     echo "ERROR: Binary not found at ${BINARY}"
     exit 1
@@ -150,8 +150,8 @@ populate_tree() {
     local dest="$1"
     local prefix="${2:-/usr/local}"
     local bindir="$dest${prefix}/bin"
-    local libdir="$dest${prefix}/lib/limux"
-    local ghostty_datadir="$dest${prefix}/share/limux"
+    local libdir="$dest${prefix}/lib/chostty"
+    local ghostty_datadir="$dest${prefix}/share/chostty"
     local ghostty_resdir="$ghostty_datadir/ghostty"
     local appdir="$dest${prefix}/share/applications"
     local metadatadir="$dest${prefix}/share/metainfo"
@@ -160,9 +160,9 @@ populate_tree() {
     mkdir -p "$bindir" "$libdir" "$ghostty_resdir" "$appdir" "$metadatadir" "$icondir/scalable/actions"
 
     # Binary
-    cp "$BINARY" "$bindir/limux"
-    strip "$bindir/limux"
-    chmod 755 "$bindir/limux"
+    cp "$BINARY" "$bindir/chostty"
+    strip "$bindir/chostty"
+    chmod 755 "$bindir/chostty"
 
     # Shared library
     cp "$GHOSTTY_SO" "$libdir/libghostty.so"
@@ -173,8 +173,8 @@ populate_tree() {
     copy_ghostty_terminfo_entries "$GHOSTTY_TERMINFO_DIR" "$ghostty_datadir/terminfo"
 
     # Desktop file
-    cp "$DESKTOP_FILE" "$appdir/dev.limux.linux.desktop"
-    cp "$METADATA_FILE" "$metadatadir/dev.limux.linux.metainfo.xml"
+    cp "$DESKTOP_FILE" "$appdir/dev.turbinebmw.chostty.desktop"
+    cp "$METADATA_FILE" "$metadatadir/dev.turbinebmw.chostty.metainfo.xml"
 
     # Action icons
     if [ -d "$ICONS_DIR/hicolor" ]; then
@@ -190,7 +190,7 @@ populate_tree() {
             src="${APP_ICONS_DIR}/${size}.png"
             if [ -f "$src" ]; then
                 mkdir -p "$icondir/${size}x${size}/apps"
-                cp "$src" "$icondir/${size}x${size}/apps/limux.png"
+                cp "$src" "$icondir/${size}x${size}/apps/chostty.png"
             fi
         done
     fi
@@ -203,18 +203,18 @@ echo ""
 echo "--- Building tarball ---"
 TARBALL_STAGE="/tmp/${PKG_BASE}"
 remove_tree "$TARBALL_STAGE"
-mkdir -p "$TARBALL_STAGE"/{lib,share/limux/ghostty,share/limux/terminfo,share/applications,share/icons/hicolor/scalable/actions}
+mkdir -p "$TARBALL_STAGE"/{lib,share/chostty/ghostty,share/chostty/terminfo,share/applications,share/icons/hicolor/scalable/actions}
 mkdir -p "$TARBALL_STAGE/share/metainfo"
 
-cp "$BINARY" "$TARBALL_STAGE/limux"
-strip "$TARBALL_STAGE/limux"
-chmod 755 "$TARBALL_STAGE/limux"
+cp "$BINARY" "$TARBALL_STAGE/chostty"
+strip "$TARBALL_STAGE/chostty"
+chmod 755 "$TARBALL_STAGE/chostty"
 cp "$GHOSTTY_SO" "$TARBALL_STAGE/lib/libghostty.so"
 strip --strip-debug "$TARBALL_STAGE/lib/libghostty.so"
-cp -r "$GHOSTTY_SHARE_DIR"/. "$TARBALL_STAGE/share/limux/ghostty"
-copy_ghostty_terminfo_entries "$GHOSTTY_TERMINFO_DIR" "$TARBALL_STAGE/share/limux/terminfo"
-cp "$DESKTOP_FILE" "$TARBALL_STAGE/share/applications/dev.limux.linux.desktop"
-cp "$METADATA_FILE" "$TARBALL_STAGE/share/metainfo/dev.limux.linux.metainfo.xml"
+cp -r "$GHOSTTY_SHARE_DIR"/. "$TARBALL_STAGE/share/chostty/ghostty"
+copy_ghostty_terminfo_entries "$GHOSTTY_TERMINFO_DIR" "$TARBALL_STAGE/share/chostty/terminfo"
+cp "$DESKTOP_FILE" "$TARBALL_STAGE/share/applications/dev.turbinebmw.chostty.desktop"
+cp "$METADATA_FILE" "$TARBALL_STAGE/share/metainfo/dev.turbinebmw.chostty.metainfo.xml"
 
 if [ -d "$ICONS_DIR/hicolor" ]; then
     cp -r "$ICONS_DIR/hicolor/scalable" "$TARBALL_STAGE/share/icons/hicolor/" 2>/dev/null || true
@@ -227,7 +227,7 @@ if [ -d "$APP_ICONS_DIR" ]; then
         src="${APP_ICONS_DIR}/${size}.png"
         if [ -f "$src" ]; then
             mkdir -p "$TARBALL_STAGE/share/icons/hicolor/${size}x${size}/apps"
-            cp "$src" "$TARBALL_STAGE/share/icons/hicolor/${size}x${size}/apps/limux.png"
+            cp "$src" "$TARBALL_STAGE/share/icons/hicolor/${size}x${size}/apps/chostty.png"
         fi
     done
 fi
@@ -274,41 +274,41 @@ remove_tree() {
 
 if $UNINSTALL; then
     need_root "$@"
-    echo "Uninstalling Limux..."
-    rm -f "$PREFIX/bin/limux"
-    remove_tree "$PREFIX/lib/limux"
-    remove_tree "$PREFIX/share/limux"
-    rm -f /etc/ld.so.conf.d/limux.conf
+    echo "Uninstalling Chostty..."
+    rm -f "$PREFIX/bin/chostty"
+    remove_tree "$PREFIX/lib/chostty"
+    remove_tree "$PREFIX/share/chostty"
+    rm -f /etc/ld.so.conf.d/chostty.conf
     ldconfig 2>/dev/null || true
-    rm -f "$PREFIX/share/applications/limux.desktop"
-    rm -f "$PREFIX/share/applications/dev.limux.linux.desktop"
-    rm -f "$PREFIX/share/metainfo/dev.limux.linux.metainfo.xml"
+    rm -f "$PREFIX/share/applications/chostty.desktop"
+    rm -f "$PREFIX/share/applications/dev.turbinebmw.chostty.desktop"
+    rm -f "$PREFIX/share/metainfo/dev.turbinebmw.chostty.metainfo.xml"
     for size in 16 32 128 256 512; do
-        rm -f "$PREFIX/share/icons/hicolor/${size}x${size}/apps/limux.png"
+        rm -f "$PREFIX/share/icons/hicolor/${size}x${size}/apps/chostty.png"
     done
-    rm -f "$PREFIX/share/icons/hicolor/scalable/actions/limux-globe-symbolic.svg"
-    rm -f "$PREFIX/share/icons/hicolor/scalable/actions/limux-split-horizontal-symbolic.svg"
-    rm -f "$PREFIX/share/icons/hicolor/scalable/actions/limux-split-vertical-symbolic.svg"
+    rm -f "$PREFIX/share/icons/hicolor/scalable/actions/chostty-globe-symbolic.svg"
+    rm -f "$PREFIX/share/icons/hicolor/scalable/actions/chostty-split-horizontal-symbolic.svg"
+    rm -f "$PREFIX/share/icons/hicolor/scalable/actions/chostty-split-vertical-symbolic.svg"
     gtk-update-icon-cache -f -t "$PREFIX/share/icons/hicolor" 2>/dev/null || true
     update-desktop-database "$PREFIX/share/applications" 2>/dev/null || true
     appstreamcli refresh-cache --force 2>/dev/null || true
-    echo "Limux uninstalled."
+    echo "Chostty uninstalled."
     exit 0
 fi
 
 need_root "$@"
-echo "Installing Limux to ${PREFIX}..."
+echo "Installing Chostty to ${PREFIX}..."
 
-install -Dm755 "$SCRIPT_DIR/limux" "$PREFIX/bin/limux"
-install -Dm644 "$SCRIPT_DIR/lib/libghostty.so" "$PREFIX/lib/limux/libghostty.so"
-if [ -d "$SCRIPT_DIR/share/limux" ]; then
-    cp -r "$SCRIPT_DIR/share/limux" "$PREFIX/share/"
+install -Dm755 "$SCRIPT_DIR/chostty" "$PREFIX/bin/chostty"
+install -Dm644 "$SCRIPT_DIR/lib/libghostty.so" "$PREFIX/lib/chostty/libghostty.so"
+if [ -d "$SCRIPT_DIR/share/chostty" ]; then
+    cp -r "$SCRIPT_DIR/share/chostty" "$PREFIX/share/"
 fi
-echo "$PREFIX/lib/limux" > /etc/ld.so.conf.d/limux.conf
+echo "$PREFIX/lib/chostty" > /etc/ld.so.conf.d/chostty.conf
 ldconfig 2>/dev/null || true
-rm -f "$PREFIX/share/applications/limux.desktop"
-install -Dm644 "$SCRIPT_DIR/share/applications/dev.limux.linux.desktop" "$PREFIX/share/applications/dev.limux.linux.desktop"
-install -Dm644 "$SCRIPT_DIR/share/metainfo/dev.limux.linux.metainfo.xml" "$PREFIX/share/metainfo/dev.limux.linux.metainfo.xml"
+rm -f "$PREFIX/share/applications/chostty.desktop"
+install -Dm644 "$SCRIPT_DIR/share/applications/dev.turbinebmw.chostty.desktop" "$PREFIX/share/applications/dev.turbinebmw.chostty.desktop"
+install -Dm644 "$SCRIPT_DIR/share/metainfo/dev.turbinebmw.chostty.metainfo.xml" "$PREFIX/share/metainfo/dev.turbinebmw.chostty.metainfo.xml"
 if [ -d "$SCRIPT_DIR/share/icons" ]; then
     cp -r "$SCRIPT_DIR/share/icons/hicolor" "$PREFIX/share/icons/"
 fi
@@ -317,10 +317,10 @@ update-desktop-database "$PREFIX/share/applications" 2>/dev/null || true
 appstreamcli refresh-cache --force 2>/dev/null || true
 
 echo ""
-echo "Limux installed successfully!"
-echo "  Binary:  $PREFIX/bin/limux"
-echo "  Library: $PREFIX/lib/limux/libghostty.so"
-echo "  Run:     limux"
+echo "Chostty installed successfully!"
+echo "  Binary:  $PREFIX/bin/chostty"
+echo "  Library: $PREFIX/lib/chostty/libghostty.so"
+echo "  Run:     chostty"
 echo ""
 echo "System dependencies (install if missing):"
 echo "  sudo apt install libgtk-4-1 libadwaita-1-0 libwebkitgtk-6.0-4"
@@ -342,33 +342,33 @@ populate_tree "$DEB_ROOT" "/usr"
 
 # ldconfig trigger
 mkdir -p "$DEB_ROOT/etc/ld.so.conf.d"
-echo "/usr/lib/limux" > "$DEB_ROOT/etc/ld.so.conf.d/limux.conf"
+echo "/usr/lib/chostty" > "$DEB_ROOT/etc/ld.so.conf.d/chostty.conf"
 
 # Control file
 INSTALLED_SIZE=$(du -sk "$DEB_ROOT" | cut -f1)
 mkdir -p "$DEB_ROOT/DEBIAN"
 cat > "$DEB_ROOT/DEBIAN/control" << EOF
-Package: limux
+Package: chostty
 Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${DEB_ARCH}
 Installed-Size: ${INSTALLED_SIZE}
 Depends: libgtk-4-1, libadwaita-1-0, libwebkitgtk-6.0-4
-Maintainer: Will R <will@limux.dev>
+Maintainer: turbineBMW
 Description: GPU-accelerated terminal workspace manager for Linux
- Limux is a terminal workspace manager powered by Ghostty's
+ Chostty is a terminal workspace manager powered by Ghostty's
  GPU-rendered terminal engine, with split panes, tabbed workspaces,
  and a built-in browser.
-Homepage: https://github.com/am-will/limux
+Homepage: https://github.com/turbineBMW/chostty
 EOF
 
 # Post-install: run ldconfig and update caches
 cat > "$DEB_ROOT/DEBIAN/postinst" << 'EOF'
 #!/bin/bash
 ldconfig 2>/dev/null || true
-rm -f /usr/share/applications/limux.desktop
-rm -f /usr/local/share/applications/limux.desktop
+rm -f /usr/share/applications/chostty.desktop
+rm -f /usr/local/share/applications/chostty.desktop
 gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
 update-desktop-database /usr/share/applications 2>/dev/null || true
 appstreamcli refresh-cache --force 2>/dev/null || true
@@ -385,38 +385,38 @@ appstreamcli refresh-cache --force 2>/dev/null || true
 EOF
 chmod 755 "$DEB_ROOT/DEBIAN/postrm"
 
-DEB_FILE="$OUT_DIR/limux_${VERSION}_${DEB_ARCH}.deb"
+DEB_FILE="$OUT_DIR/chostty_${VERSION}_${DEB_ARCH}.deb"
 dpkg-deb --build --root-owner-group "$DEB_ROOT" "$DEB_FILE"
-echo "  -> dist/limux_${VERSION}_${DEB_ARCH}.deb"
+echo "  -> dist/chostty_${VERSION}_${DEB_ARCH}.deb"
 
 # =========================================================================
 # 3. AppImage
 # =========================================================================
 echo ""
 echo "--- Building AppImage ---"
-APPDIR="$STAGE/Limux.AppDir"
+APPDIR="$STAGE/Chostty.AppDir"
 remove_tree "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib" "$APPDIR/usr/share/applications" \
          "$APPDIR/usr/share/metainfo" \
          "$APPDIR/usr/share/icons/hicolor/scalable/actions" \
-         "$APPDIR/usr/share/limux"
+         "$APPDIR/usr/share/chostty"
 
 # Binary
-cp "$BINARY" "$APPDIR/usr/bin/limux"
-strip "$APPDIR/usr/bin/limux"
-chmod 755 "$APPDIR/usr/bin/limux"
+cp "$BINARY" "$APPDIR/usr/bin/chostty"
+strip "$APPDIR/usr/bin/chostty"
+chmod 755 "$APPDIR/usr/bin/chostty"
 
 # Shared library
 cp "$GHOSTTY_SO" "$APPDIR/usr/lib/libghostty.so"
 strip --strip-debug "$APPDIR/usr/lib/libghostty.so"
 
 # Ghostty resources required for named themes and shell integration
-cp -r "$GHOSTTY_SHARE_DIR" "$APPDIR/usr/share/limux/ghostty"
+cp -r "$GHOSTTY_SHARE_DIR" "$APPDIR/usr/share/chostty/ghostty"
 
 # Desktop file (at AppDir root and in usr/share)
-cp "$DESKTOP_FILE" "$APPDIR/dev.limux.linux.desktop"
-cp "$DESKTOP_FILE" "$APPDIR/usr/share/applications/dev.limux.linux.desktop"
-cp "$METADATA_FILE" "$APPDIR/usr/share/metainfo/dev.limux.linux.metainfo.xml"
+cp "$DESKTOP_FILE" "$APPDIR/dev.turbinebmw.chostty.desktop"
+cp "$DESKTOP_FILE" "$APPDIR/usr/share/applications/dev.turbinebmw.chostty.desktop"
+cp "$METADATA_FILE" "$APPDIR/usr/share/metainfo/dev.turbinebmw.chostty.metainfo.xml"
 
 # Icons
 if [ -d "$ICONS_DIR/hicolor" ]; then
@@ -430,14 +430,14 @@ if [ -d "$APP_ICONS_DIR" ]; then
         src="${APP_ICONS_DIR}/${size}.png"
         if [ -f "$src" ]; then
             mkdir -p "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps"
-            cp "$src" "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps/limux.png"
+            cp "$src" "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps/chostty.png"
         fi
     done
 fi
 
-# AppImage icon (must be at root as .DirIcon and limux.png)
+# AppImage icon (must be at root as .DirIcon and chostty.png)
 if [ -f "$APP_ICONS_DIR/256.png" ]; then
-    cp "$APP_ICONS_DIR/256.png" "$APPDIR/limux.png"
+    cp "$APP_ICONS_DIR/256.png" "$APPDIR/chostty.png"
     cp "$APP_ICONS_DIR/256.png" "$APPDIR/.DirIcon"
 fi
 
@@ -447,12 +447,12 @@ cat > "$APPDIR/AppRun" << 'APPRUN_EOF'
 HERE="$(dirname "$(readlink -f "$0")")"
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH:-}"
 export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS:-/usr/share}"
-exec "${HERE}/usr/bin/limux" "$@"
+exec "${HERE}/usr/bin/chostty" "$@"
 APPRUN_EOF
 chmod 755 "$APPDIR/AppRun"
 
 # Build AppImage
-APPIMAGE_FILE="$OUT_DIR/Limux-${VERSION}-${ARCH}.AppImage"
+APPIMAGE_FILE="$OUT_DIR/Chostty-${VERSION}-${ARCH}.AppImage"
 if command -v appimagetool &>/dev/null; then
     APPIMAGETOOL="appimagetool"
 elif [ -x /tmp/appimagetool ]; then
@@ -464,7 +464,7 @@ fi
 
 if [ -n "$APPIMAGETOOL" ]; then
     ARCH="$ARCH" "$APPIMAGETOOL" "$APPDIR" "$APPIMAGE_FILE" 2>&1 | tail -3
-    echo "  -> dist/Limux-${VERSION}-${ARCH}.AppImage"
+    echo "  -> dist/Chostty-${VERSION}-${ARCH}.AppImage"
 fi
 
 # =========================================================================
@@ -476,5 +476,5 @@ ls -lh "$OUT_DIR"/ 2>/dev/null
 echo ""
 echo "Install options:"
 echo "  Tarball:   tar xzf dist/${PKG_BASE}.tar.gz && cd ${PKG_BASE} && sudo ./install.sh"
-echo "  Deb:       sudo dpkg -i ./dist/limux_${VERSION}_${DEB_ARCH}.deb"
-echo "  AppImage:  chmod +x dist/Limux-${VERSION}-${ARCH}.AppImage && ./dist/Limux-${VERSION}-${ARCH}.AppImage"
+echo "  Deb:       sudo dpkg -i ./dist/chostty_${VERSION}_${DEB_ARCH}.deb"
+echo "  AppImage:  chmod +x dist/Chostty-${VERSION}-${ARCH}.AppImage && ./dist/Chostty-${VERSION}-${ARCH}.AppImage"

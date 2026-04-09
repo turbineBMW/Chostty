@@ -1,0 +1,14 @@
+[package]
+name = "chostty-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+chostty-control = { path = "../chostty-control" }
+chostty-protocol = { path = "../chostty-protocol" }
+serde_json.workspace = true
+tokio.workspace = true

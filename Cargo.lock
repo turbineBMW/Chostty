@@ -132,6 +132,79 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "chostty-cli"
+version = "0.1.12"
+dependencies = [
+ "anyhow",
+ "chostty-control",
+ "chostty-protocol",
+ "clap",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "chostty-control"
+version = "0.1.12"
+dependencies = [
+ "anyhow",
+ "chostty-core",
+ "chostty-protocol",
+ "clap",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "chostty-core"
+version = "0.1.12"
+dependencies = [
+ "anyhow",
+ "chostty-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "chostty-ghostty-sys"
+version = "0.1.12"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "chostty-host-linux"
+version = "0.1.12"
+dependencies = [
+ "chostty-control",
+ "chostty-ghostty-sys",
+ "chostty-protocol",
+ "dirs",
+ "gdk4-wayland",
+ "gtk4",
+ "libadwaita",
+ "serde",
+ "serde_json",
+ "shell-quote",
+ "tempfile",
+ "uuid",
+ "webkit6",
+]
+
+[[package]]
+name = "chostty-protocol"
+version = "0.1.12"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "clap"
 version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -733,79 +806,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1744e39d1d6a9948f4f388969627434e31128196de472883b39f148769bfe30a"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "limux-cli"
-version = "0.1.12"
-dependencies = [
- "anyhow",
- "clap",
- "limux-control",
- "limux-protocol",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "limux-control"
-version = "0.1.12"
-dependencies = [
- "anyhow",
- "clap",
- "limux-core",
- "limux-protocol",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "limux-core"
-version = "0.1.12"
-dependencies = [
- "anyhow",
- "limux-protocol",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "limux-ghostty-sys"
-version = "0.1.12"
-dependencies = [
- "cc",
-]
-
-[[package]]
-name = "limux-host-linux"
-version = "0.1.12"
-dependencies = [
- "dirs",
- "gdk4-wayland",
- "gtk4",
- "libadwaita",
- "limux-control",
- "limux-ghostty-sys",
- "limux-protocol",
- "serde",
- "serde_json",
- "shell-quote",
- "tempfile",
- "uuid",
- "webkit6",
-]
-
-[[package]]
-name = "limux-protocol"
-version = "0.1.12"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror",
 ]
 
 [[package]]

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.turbinebmw.chostty</id>
+  <launchable type="desktop-id">dev.turbinebmw.chostty.desktop</launchable>
+  <name>Chostty</name>
+  <summary>GPU-accelerated terminal workspace manager for Linux</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <content_rating type="oars-1.1" />
+  <developer id="dev.turbinebmw">
+    <name>turbineBMW</name>
+  </developer>
+  <url type="homepage">https://github.com/turbineBMW/chostty</url>
+  <url type="bugtracker">https://github.com/turbineBMW/chostty/issues</url>
+  <description>
+    <p>
+      Chostty is a terminal workspace manager powered by Ghostty&apos;s
+      GPU-rendered terminal engine, with split panes, tabbed workspaces,
+      and a built-in browser.
+    </p>
+  </description>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+</component>

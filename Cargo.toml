@@ -1,16 +1,16 @@
 [workspace]
 members = [
-  "rust/limux-protocol",
-  "rust/limux-core",
-  "rust/limux-control",
-  "rust/limux-cli",
-  "rust/limux-ghostty-sys",
-  "rust/limux-host-linux",
+  "rust/chostty-protocol",
+  "rust/chostty-core",
+  "rust/chostty-control",
+  "rust/chostty-cli",
+  "rust/chostty-ghostty-sys",
+  "rust/chostty-host-linux",
 ]
 resolver = "2"
 
 [workspace.package]
-authors = ["limux contributors"]
+authors = ["chostty contributors"]
 edition = "2021"
 license = "MIT"
 version = "0.1.12"

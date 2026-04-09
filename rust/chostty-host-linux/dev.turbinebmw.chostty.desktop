@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Name=Chostty
+Comment=GPU-accelerated terminal workspace manager
+Exec=chostty
+TryExec=chostty
+Icon=chostty
+Terminal=false
+Type=Application
+Categories=Utility;TerminalEmulator;
+Keywords=terminal;multiplexer;ghostty;workspace;
+StartupNotify=true
+StartupWMClass=dev.turbinebmw.chostty
+X-GNOME-UsesNotifications=true

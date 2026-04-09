@@ -1,4 +1,4 @@
-# Limux
+# Chostty
 
 A GPU-accelerated terminal workspace manager for Linux, powered by Ghostty's rendering engine. A special thanks to the cmux contributors who inspired this build. 
 
@@ -19,37 +19,37 @@ https://github.com/user-attachments/assets/6f3047c2-e2b6-49f2-b536-570a1570d0f8
 
 ## Install
 
-Download the latest release from [GitHub Releases](https://github.com/am-will/limux/releases).
+Download the latest release from [GitHub Releases](https://github.com/turbineBMW/chostty/releases).
 
 **Debian/Ubuntu (.deb)** — recommended:
 ```bash
-sudo dpkg -i ./limux_0.1.7_amd64.deb
+sudo dpkg -i ./chostty_0.1.7_amd64.deb
 ```
 
 **AppImage** — portable, no install needed:
 ```bash
-chmod +x Limux-0.1.7-x86_64.AppImage
-./Limux-0.1.7-x86_64.AppImage
+chmod +x Chostty-0.1.7-x86_64.AppImage
+./Chostty-0.1.7-x86_64.AppImage
 ```
 
 **Tarball** — manual install:
 ```bash
-tar xzf limux-*-linux-x86_64.tar.gz
-cd limux-*-linux-x86_64
+tar xzf chostty-*-linux-x86_64.tar.gz
+cd chostty-*-linux-x86_64
 sudo ./install.sh
 ```
 
 **Arch Linux (unofficial AUR package)** — community-maintained by [antonbarchukov](https://github.com/antonbarchukov):
 ```bash
-yay -S limux-bin
+yay -S chostty-bin
 ```
 
-The AUR package is available at [`limux-bin`](https://aur.archlinux.org/packages/limux-bin). Thanks to [antonbarchukov](https://github.com/antonbarchukov) for packaging Limux for Arch users. Arch packaging is not currently maintained by upstream; please report AUR packaging issues to the package maintainer first. See [issue #5](https://github.com/am-will/limux/issues/5).
+The AUR package is available at [`chostty-bin`](https://aur.archlinux.org/packages/chostty-bin). Thanks to [antonbarchukov](https://github.com/antonbarchukov) for packaging Chostty for Arch users. Arch packaging is not currently maintained by upstream; please report AUR packaging issues to the package maintainer first. See [issue #5](https://github.com/turbineBMW/chostty/issues/5).
 
 To uninstall:
 ```bash
 # deb
-sudo apt remove limux
+sudo apt remove chostty
 
 # tarball
 sudo ./install.sh --uninstall
@@ -62,7 +62,7 @@ sudo ./install.sh --uninstall
 sudo apt install libgtk-4-1 libadwaita-1-0 libwebkitgtk-6.0-4
 ```
 
-Limux now requires `libadwaita >= 1.5`, which is available in Ubuntu 24.04+ and Debian 13+.
+Chostty now requires `libadwaita >= 1.5`, which is available in Ubuntu 24.04+ and Debian 13+.
 
 ## Build from source
 
@@ -81,11 +81,11 @@ sudo apt install libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev pkg-config b
 git submodule update --init --recursive
 (cd ghostty && zig build -Dapp-runtime=none -Doptimize=ReleaseFast)
 
-# Build limux
+# Build chostty
 cargo build --release
 
 # Run (point to libghostty.so location)
-LD_LIBRARY_PATH=../ghostty/zig-out/lib:$LD_LIBRARY_PATH ./target/release/limux
+LD_LIBRARY_PATH=../ghostty/zig-out/lib:$LD_LIBRARY_PATH ./target/release/chostty
 ```
 
 ### Package a release tarball
@@ -109,14 +109,14 @@ Repository maintainability rules live in [`docs/maintainability.md`](docs/mainta
 
 ## Keyboard shortcuts
 
-Most default shortcuts use `Ctrl`. Fullscreen defaults to `F11`. Custom remaps may also use `Cmd`, which Limux maps to either the Linux `Meta` or `Super` modifier. `Opt` maps to `Alt`.
+Most default shortcuts use `Ctrl`. Fullscreen defaults to `F11`. Custom remaps may also use `Cmd`, which Chostty maps to either the Linux `Meta` or `Super` modifier. `Opt` maps to `Alt`.
 
 ### App
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+Q` | Quit Limux |
-| `Ctrl+Alt+N` | Open a new Limux instance |
+| `Ctrl+Q` | Quit Chostty |
+| `Ctrl+Alt+N` | Open a new Chostty instance |
 | `Ctrl+,` | Open settings |
 | `F11` | Toggle fullscreen |
 
@@ -176,12 +176,12 @@ Most default shortcuts use `Ctrl`. Fullscreen defaults to `F11`. Custom remaps m
 
 ```
 rust/
-  limux-host-linux/    # GTK4/Adwaita UI (window, sidebar, panes, tabs)
-  limux-ghostty-sys/   # FFI bindings to libghostty
-  limux-core/          # Command dispatcher and state engine
-  limux-protocol/      # Socket wire format types
-  limux-control/       # Unix socket server
-  limux-cli/           # CLI client
+  chostty-host-linux/    # GTK4/Adwaita UI (window, sidebar, panes, tabs)
+  chostty-ghostty-sys/   # FFI bindings to libghostty
+  chostty-core/          # Command dispatcher and state engine
+  chostty-protocol/      # Socket wire format types
+  chostty-control/       # Unix socket server
+  chostty-cli/           # CLI client
 ```
 
 The terminal rendering is handled entirely by Ghostty's embedded library (`libghostty.so`), which provides GPU-accelerated OpenGL rendering. The UI layer is native GTK4 with libadwaita.

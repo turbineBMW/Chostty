@@ -1,0 +1,655 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use gtk::prelude::*;
+use gtk4 as gtk;
+
+use crate::shortcut_config::{
+    self, NormalizedShortcut, ResolvedShortcutConfig, ShortcutConfigError, ShortcutId,
+};
+
+enum CaptureOutcome {
+    ContinueListening,
+    CancelListening,
+    CommitBinding(Option<NormalizedShortcut>),
+    Error(String),
+}
+
+pub const KEYBIND_EDITOR_LISTENING_CSS: &str = "chostty-keybind-editor-listening";
+
+pub const KEYBIND_EDITOR_CSS: &str = r#"
+.chostty-keybind-editor {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+    padding: 14px;
+}
+.chostty-keybind-header {
+    margin-bottom: 8px;
+}
+.chostty-keybind-title {
+    font-weight: 700;
+}
+.chostty-keybind-hint {
+    font-size: 12px;
+    margin-bottom: 10px;
+    opacity: 0.7;
+}
+.chostty-keybind-scroll viewport {
+    background: transparent;
+}
+.chostty-keybind-row {
+    padding: 10px 12px;
+    margin-bottom: 8px;
+}
+.chostty-keybind-action {
+    font-weight: 600;
+}
+.chostty-keybind-default {
+    font-size: 12px;
+    opacity: 0.7;
+}
+.chostty-keybind-capture {
+    min-width: 168px;
+    padding: 8px 12px;
+}
+.chostty-keybind-capture-listening {
+    border-color: @accent_bg_color;
+    box-shadow: inset 0 0 0 1px @accent_bg_color;
+}
+.chostty-keybind-error {
+    color: @error_color;
+    font-size: 12px;
+    margin-top: 6px;
+}
+.chostty-keybind-row-hint {
+    font-size: 12px;
+    margin-top: 6px;
+    opacity: 0.7;
+}
+"#;
+
+#[derive(Clone)]
+struct RowWidgets {
+    id: ShortcutId,
+    row: gtk::Box,
+    binding_button: gtk::Button,
+    hint_label: gtk::Label,
+    error_label: gtk::Label,
+}
+
+pub fn build_keybind_editor(
+    shortcuts: &ResolvedShortcutConfig,
+    on_capture: Rc<
+        dyn Fn(ShortcutId, Option<NormalizedShortcut>) -> Result<ResolvedShortcutConfig, String>,
+    >,
+) -> gtk::Widget {
+    let state = Rc::new(RefCell::new(shortcuts.clone()));
+    let listening = Rc::new(RefCell::new(None::<ShortcutId>));
+    let errors = Rc::new(RefCell::new(HashMap::<ShortcutId, String>::new()));
+    let filter_query = Rc::new(RefCell::new(String::new()));
+    let rows = Rc::new(RefCell::new(Vec::<RowWidgets>::new()));
+
+    let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    outer.add_css_class("chostty-keybind-editor");
+    outer.set_width_request(540);
+    outer.set_hexpand(true);
+    outer.set_vexpand(true);
+    outer.set_focusable(true);
+    outer.set_can_focus(true);
+
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    header.add_css_class("chostty-keybind-header");
+
+    let title = gtk::Label::builder()
+        .label("Keybinds")
+        .xalign(0.0)
+        .hexpand(true)
+        .build();
+    title.add_css_class("chostty-keybind-title");
+    header.append(&title);
+
+    let hint = gtk::Label::builder()
+        .label(
+            "Click a shortcut field, then press a Ctrl, Alt, or Cmd combo. Shift is allowed as an additional modifier. Press Del to unbind. Press Esc to cancel.",
+        )
+        .wrap(true)
+        .xalign(0.0)
+        .build();
+    hint.add_css_class("chostty-keybind-hint");
+
+    let search_entry = gtk::SearchEntry::builder()
+        .placeholder_text("Search keybindings")
+        .hexpand(true)
+        .build();
+    search_entry.set_margin_bottom(10);
+
+    let no_results_label = gtk::Label::builder()
+        .label("No keybindings match that search.")
+        .xalign(0.0)
+        .visible(false)
+        .build();
+    no_results_label.add_css_class("dim-label");
+    no_results_label.set_margin_bottom(10);
+
+    let rows_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+
+    for definition in shortcut_config::definitions() {
+        let shortcut_id = definition.id;
+
+        let row = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        row.add_css_class("card");
+        row.add_css_class("chostty-keybind-row");
+
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+
+        let meta = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        meta.set_hexpand(true);
+
+        let action_label = gtk::Label::builder()
+            .label(definition.label)
+            .xalign(0.0)
+            .hexpand(true)
+            .build();
+        action_label.add_css_class("chostty-keybind-action");
+
+        let default_label = gtk::Label::builder()
+            .label(format!(
+                "Default: {}",
+                shortcuts
+                    .default_display_label_for_id(definition.id)
+                    .unwrap_or_else(|| definition.default_display_label())
+            ))
+            .xalign(0.0)
+            .wrap(true)
+            .build();
+        default_label.add_css_class("chostty-keybind-default");
+        default_label.set_opacity(0.7);
+
+        meta.append(&action_label);
+        meta.append(&default_label);
+
+        let binding_button =
+            gtk::Button::with_label(&binding_button_label(shortcuts, definition.id, false));
+        binding_button.add_css_class("chostty-keybind-capture");
+        binding_button.set_focusable(true);
+        binding_button.set_can_focus(true);
+        binding_button.set_focus_on_click(true);
+        binding_button.set_halign(gtk::Align::End);
+
+        let error_label = gtk::Label::builder()
+            .xalign(0.0)
+            .wrap(true)
+            .visible(false)
+            .build();
+        error_label.add_css_class("chostty-keybind-error");
+
+        let hint_label = gtk::Label::builder()
+            .label("Press Del to unbind. Esc cancels.")
+            .xalign(0.0)
+            .wrap(true)
+            .visible(false)
+            .build();
+        hint_label.add_css_class("chostty-keybind-row-hint");
+        hint_label.set_opacity(0.7);
+
+        top.append(&meta);
+        top.append(&binding_button);
+        row.append(&top);
+        row.append(&hint_label);
+        row.append(&error_label);
+        rows_box.append(&row);
+
+        rows.borrow_mut().push(RowWidgets {
+            id: definition.id,
+            row: row.clone(),
+            binding_button: binding_button.clone(),
+            hint_label: hint_label.clone(),
+            error_label: error_label.clone(),
+        });
+
+        {
+            let listening = listening.clone();
+            let errors = errors.clone();
+            let rows = rows.clone();
+            let state = state.clone();
+            let filter_query = filter_query.clone();
+            let no_results_label = no_results_label.clone();
+            let outer = outer.clone();
+            binding_button.connect_clicked(move |button| {
+                *listening.borrow_mut() = Some(shortcut_id);
+                errors.borrow_mut().remove(&shortcut_id);
+                sync_editor_listening_class(&outer, true);
+                refresh_rows(
+                    &rows.borrow(),
+                    &state.borrow(),
+                    *listening.borrow(),
+                    &errors.borrow(),
+                    filter_query.borrow().as_str(),
+                    &no_results_label,
+                );
+                button.grab_focus();
+            });
+        }
+    }
+
+    {
+        let listening = listening.clone();
+        let errors = errors.clone();
+        let rows = rows.clone();
+        let state = state.clone();
+        let filter_query = filter_query.clone();
+        let no_results_label = no_results_label.clone();
+        let on_capture = on_capture.clone();
+        let outer_for_controller = outer.clone();
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+        key_controller.connect_key_pressed(move |controller, keyval, keycode, modifier| {
+            let Some(shortcut_id) = *listening.borrow() else {
+                return gtk::glib::Propagation::Proceed;
+            };
+            let Some(definition) = shortcut_config::definitions()
+                .iter()
+                .find(|definition| definition.id == shortcut_id)
+            else {
+                return gtk::glib::Propagation::Proceed;
+            };
+            let display = controller.widget().map(|widget| widget.display());
+
+            match capture_outcome_for_key_press(
+                display.as_ref(),
+                keyval,
+                keycode,
+                modifier,
+                definition.config_key,
+            ) {
+                CaptureOutcome::ContinueListening => {
+                    return gtk::glib::Propagation::Stop;
+                }
+                CaptureOutcome::CancelListening => {
+                    *listening.borrow_mut() = None;
+                    errors.borrow_mut().remove(&shortcut_id);
+                    sync_editor_listening_class(&outer_for_controller, false);
+                }
+                CaptureOutcome::CommitBinding(binding) => match on_capture(shortcut_id, binding) {
+                    Ok(updated) => {
+                        *state.borrow_mut() = updated;
+                        *listening.borrow_mut() = None;
+                        errors.borrow_mut().remove(&shortcut_id);
+                        sync_editor_listening_class(&outer_for_controller, false);
+                    }
+                    Err(err) => {
+                        *listening.borrow_mut() = None;
+                        errors.borrow_mut().insert(shortcut_id, err);
+                        sync_editor_listening_class(&outer_for_controller, false);
+                    }
+                },
+                CaptureOutcome::Error(message) => {
+                    *listening.borrow_mut() = None;
+                    errors.borrow_mut().insert(shortcut_id, message);
+                    sync_editor_listening_class(&outer_for_controller, false);
+                }
+            }
+
+            refresh_rows(
+                &rows.borrow(),
+                &state.borrow(),
+                *listening.borrow(),
+                &errors.borrow(),
+                filter_query.borrow().as_str(),
+                &no_results_label,
+            );
+            gtk::glib::Propagation::Stop
+        });
+        outer.add_controller(key_controller);
+    }
+
+    {
+        let filter_query = filter_query.clone();
+        let rows = rows.clone();
+        let state = state.clone();
+        let listening = listening.clone();
+        let errors = errors.clone();
+        let no_results_label = no_results_label.clone();
+        search_entry.connect_search_changed(move |entry| {
+            let query = entry.text().to_string();
+            *filter_query.borrow_mut() = query;
+            refresh_rows(
+                &rows.borrow(),
+                &state.borrow(),
+                *listening.borrow(),
+                &errors.borrow(),
+                filter_query.borrow().as_str(),
+                &no_results_label,
+            );
+        });
+    }
+
+    refresh_rows(
+        &rows.borrow(),
+        shortcuts,
+        None,
+        &HashMap::new(),
+        "",
+        &no_results_label,
+    );
+
+    let scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .child(&rows_box)
+        .build();
+    scroller.add_css_class("chostty-keybind-scroll");
+    scroller.set_hexpand(true);
+    scroller.set_vexpand(true);
+
+    outer.append(&header);
+    outer.append(&hint);
+    outer.append(&search_entry);
+    outer.append(&no_results_label);
+    outer.append(&scroller);
+    outer.upcast()
+}
+
+fn sync_editor_listening_class(editor: &gtk::Box, listening: bool) {
+    if listening {
+        editor.add_css_class(KEYBIND_EDITOR_LISTENING_CSS);
+    } else {
+        editor.remove_css_class(KEYBIND_EDITOR_LISTENING_CSS);
+    }
+}
+
+fn binding_button_label(
+    shortcuts: &ResolvedShortcutConfig,
+    id: ShortcutId,
+    listening: bool,
+) -> String {
+    if listening {
+        return "Press shortcut…".to_string();
+    }
+
+    shortcuts
+        .display_label_for_id(id)
+        .unwrap_or_else(|| "Unbound".to_string())
+}
+
+fn refresh_rows(
+    rows: &[RowWidgets],
+    shortcuts: &ResolvedShortcutConfig,
+    listening: Option<ShortcutId>,
+    errors: &HashMap<ShortcutId, String>,
+    filter_query: &str,
+    no_results_label: &gtk::Label,
+) {
+    let mut visible_count = 0;
+
+    for row in rows {
+        let is_listening = listening == Some(row.id);
+        let is_visible = shortcut_matches_filter(shortcuts, row.id, filter_query);
+        row.row.set_visible(is_visible);
+        if is_visible {
+            visible_count += 1;
+        }
+        row.binding_button
+            .set_label(&binding_button_label(shortcuts, row.id, is_listening));
+        row.hint_label.set_visible(is_listening);
+        if is_listening {
+            row.binding_button
+                .add_css_class("chostty-keybind-capture-listening");
+        } else {
+            row.binding_button
+                .remove_css_class("chostty-keybind-capture-listening");
+        }
+
+        if let Some(error) = errors.get(&row.id) {
+            row.error_label.set_label(error);
+            row.error_label.set_visible(true);
+        } else {
+            row.error_label.set_visible(false);
+        }
+    }
+
+    no_results_label.set_visible(visible_count == 0);
+}
+
+fn shortcut_matches_filter(
+    shortcuts: &ResolvedShortcutConfig,
+    id: ShortcutId,
+    filter_query: &str,
+) -> bool {
+    let query = filter_query.trim();
+    if query.is_empty() {
+        return true;
+    }
+
+    let query = query.to_ascii_lowercase();
+    let Some(definition) = shortcut_config::definitions()
+        .iter()
+        .find(|definition| definition.id == id)
+    else {
+        return false;
+    };
+
+    let current_label = shortcuts
+        .display_label_for_id(id)
+        .unwrap_or_else(|| "Unbound".to_string());
+    let default_label = shortcuts
+        .default_display_label_for_id(id)
+        .unwrap_or_else(|| definition.default_display_label());
+    let candidates = [
+        definition.label.to_string(),
+        definition.config_key.to_string(),
+        definition.action_basename().to_string(),
+        current_label,
+        default_label,
+    ];
+
+    candidates
+        .iter()
+        .any(|candidate| candidate.to_ascii_lowercase().contains(&query))
+}
+
+#[cfg(test)]
+fn capture_outcome_for_key_event(
+    keyval: gtk::gdk::Key,
+    modifier: gtk::gdk::ModifierType,
+    config_key: &str,
+) -> CaptureOutcome {
+    capture_outcome_for_key_press(None, keyval, 0, modifier, config_key)
+}
+
+fn capture_outcome_for_key_press(
+    display: Option<&gtk::gdk::Display>,
+    keyval: gtk::gdk::Key,
+    keycode: u32,
+    modifier: gtk::gdk::ModifierType,
+    config_key: &str,
+) -> CaptureOutcome {
+    if keyval == gtk::gdk::Key::Escape {
+        return CaptureOutcome::CancelListening;
+    }
+
+    let unbind_modifiers = gtk::gdk::ModifierType::SHIFT_MASK
+        | gtk::gdk::ModifierType::CONTROL_MASK
+        | gtk::gdk::ModifierType::ALT_MASK
+        | gtk::gdk::ModifierType::META_MASK
+        | gtk::gdk::ModifierType::SUPER_MASK;
+    if matches!(keyval, gtk::gdk::Key::Delete | gtk::gdk::Key::KP_Delete)
+        && !modifier.intersects(unbind_modifiers)
+    {
+        return CaptureOutcome::CommitBinding(None);
+    }
+
+    let Some(binding) = NormalizedShortcut::from_gdk_key_event(display, keyval, keycode, modifier)
+    else {
+        return CaptureOutcome::ContinueListening;
+    };
+
+    let Some(definition) = shortcut_config::definition_by_config_key(config_key) else {
+        return CaptureOutcome::Error("That shortcut is not valid.".to_string());
+    };
+
+    match binding.validate_host_binding(definition) {
+        Ok(()) => CaptureOutcome::CommitBinding(Some(binding)),
+        Err(err) => CaptureOutcome::Error(validation_error_message(&err)),
+    }
+}
+
+fn validation_error_message(err: &ShortcutConfigError) -> String {
+    match err {
+        ShortcutConfigError::BaseModifierRequired { .. } => {
+            "Use Ctrl, Alt, or Cmd together with another key.".to_string()
+        }
+        ShortcutConfigError::ModifierOnlyBinding { .. } => {
+            "Choose a non-modifier key for this shortcut.".to_string()
+        }
+        ShortcutConfigError::DuplicateBinding { .. } => {
+            "That shortcut is already assigned to another action.".to_string()
+        }
+        _ => "That shortcut is not valid.".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        binding_button_label, capture_outcome_for_key_event, shortcut_matches_filter,
+        validation_error_message, CaptureOutcome,
+    };
+    use crate::shortcut_config::{
+        default_shortcuts, resolve_shortcuts_from_str, ShortcutConfigError, ShortcutId,
+    };
+    use gtk4::gdk;
+
+    #[test]
+    fn binding_button_label_prefers_current_binding_and_listening_state() {
+        let defaults = default_shortcuts();
+        assert_eq!(
+            binding_button_label(&defaults, ShortcutId::SplitRight, false),
+            "Ctrl+D"
+        );
+        assert_eq!(
+            binding_button_label(&defaults, ShortcutId::SplitRight, true),
+            "Press shortcut…"
+        );
+
+        let remapped = resolve_shortcuts_from_str(
+            r#"{
+                "shortcuts": {
+                    "split_right": "<Ctrl><Alt>h"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            binding_button_label(&remapped, ShortcutId::SplitRight, false),
+            "Ctrl+Alt+H"
+        );
+    }
+
+    #[test]
+    fn shortcut_matches_filter_checks_label_and_binding_text() {
+        let defaults = default_shortcuts();
+        assert!(shortcut_matches_filter(
+            &defaults,
+            ShortcutId::SplitRight,
+            "split"
+        ));
+        assert!(shortcut_matches_filter(
+            &defaults,
+            ShortcutId::SplitRight,
+            "ctrl+d"
+        ));
+        assert!(shortcut_matches_filter(
+            &defaults,
+            ShortcutId::SplitRight,
+            "split_right"
+        ));
+
+        let remapped = resolve_shortcuts_from_str(
+            r#"{
+                "shortcuts": {
+                    "split_right": "<Ctrl><Alt>h"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(shortcut_matches_filter(
+            &remapped,
+            ShortcutId::SplitRight,
+            "alt+h"
+        ));
+        assert!(shortcut_matches_filter(
+            &remapped,
+            ShortcutId::SplitRight,
+            "ctrl+d"
+        ));
+        assert!(!shortcut_matches_filter(
+            &remapped,
+            ShortcutId::SplitRight,
+            "workspace rename"
+        ));
+    }
+
+    #[test]
+    fn validation_error_message_is_user_facing() {
+        let err = ShortcutConfigError::BaseModifierRequired {
+            shortcut_id: "split_right".to_string(),
+            input: "<Shift>h".to_string(),
+        };
+        assert_eq!(
+            validation_error_message(&err),
+            "Use Ctrl, Alt, or Cmd together with another key."
+        );
+    }
+
+    #[test]
+    fn capture_outcome_keeps_listening_for_modifier_only_press() {
+        assert!(matches!(
+            capture_outcome_for_key_event(
+                gdk::Key::Control_L,
+                gdk::ModifierType::empty(),
+                "split_right"
+            ),
+            CaptureOutcome::ContinueListening
+        ));
+    }
+
+    #[test]
+    fn capture_outcome_commits_first_non_modifier_with_current_modifiers() {
+        match capture_outcome_for_key_event(
+            gdk::Key::_0,
+            gdk::ModifierType::CONTROL_MASK,
+            "split_right",
+        ) {
+            CaptureOutcome::CommitBinding(Some(binding)) => {
+                assert_eq!(binding.to_display_label(), "Ctrl+0");
+            }
+            _ => panic!("expected capture"),
+        }
+    }
+
+    #[test]
+    fn capture_outcome_supports_delete_to_unbind() {
+        assert!(matches!(
+            capture_outcome_for_key_event(
+                gdk::Key::Delete,
+                gdk::ModifierType::empty(),
+                "split_right"
+            ),
+            CaptureOutcome::CommitBinding(None)
+        ));
+    }
+
+    #[test]
+    fn capture_outcome_keeps_modified_delete_available_for_binding() {
+        assert!(matches!(
+            capture_outcome_for_key_event(
+                gdk::Key::Delete,
+                gdk::ModifierType::CONTROL_MASK,
+                "split_right"
+            ),
+            CaptureOutcome::CommitBinding(Some(_))
+        ));
+    }
+}

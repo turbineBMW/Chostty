@@ -1,10 +1,10 @@
-# Limux Shortcut Remapping
+# Chostty Shortcut Remapping
 
 This document explains how the Linux host shortcut system works and how to test it manually.
 
 ## What It Does
 
-Limux has a host-owned shortcut registry in `rust/limux-host-linux/src/shortcut_config.rs`.
+Chostty has a host-owned shortcut registry in `rust/chostty-host-linux/src/shortcut_config.rs`.
 
 That registry is the single source of truth for:
 
@@ -14,32 +14,32 @@ That registry is the single source of truth for:
 - capture-phase host shortcut dispatch
 - visible tooltip text for shortcut-backed UI actions
 
-Ghostty config is not involved. Ghostty still owns terminal behavior once Limux decides not to intercept a key.
+Ghostty config is not involved. Ghostty still owns terminal behavior once Chostty decides not to intercept a key.
 
 ## Config File Location
 
-Limux reads shortcuts from:
+Chostty reads shortcuts from:
 
 ```text
-~/.config/limux/config.json
+~/.config/chostty/config.json
 ```
 
-That path comes from `dirs::config_dir()/limux/config.json`.
+That path comes from `dirs::config_dir()/chostty/config.json`.
 
-If the file is missing, Limux uses built-in defaults.
+If the file is missing, Chostty uses built-in defaults.
 
 ## Important Runtime Behavior
 
 - Shortcuts are loaded at startup.
-- When you change them through the terminal `Keybinds` editor, Limux writes the config, reloads it, and applies the new bindings immediately in the running app.
-- If you edit `~/.config/limux/config.json` by hand outside the app, restart Limux to pick up those changes.
-- If the config file is invalid or unreadable, Limux falls back to defaults and prints a warning to stderr.
-- If two active shortcuts resolve to the same binding, Limux rejects the override set and falls back to defaults.
+- When you change them through the terminal `Keybinds` editor, Chostty writes the config, reloads it, and applies the new bindings immediately in the running app.
+- If you edit `~/.config/chostty/config.json` by hand outside the app, restart Chostty to pick up those changes.
+- If the config file is invalid or unreadable, Chostty falls back to defaults and prints a warning to stderr.
+- If two active shortcuts resolve to the same binding, Chostty rejects the override set and falls back to defaults.
 - Unknown shortcut IDs are ignored with a warning.
 - `null` or `""` unbinds a shortcut.
 - Host shortcuts must use `Ctrl`, `Alt`, or `Cmd` as the base modifier unless the shortcut explicitly allows a bare function key, such as the default `F11` fullscreen binding. `Shift` can be added on top of a modified shortcut.
 - Most default shortcuts use `Ctrl`; fullscreen defaults to `F11`.
-- `Cmd` is a logical Limux modifier that matches either Linux `Meta` or Linux `Super` for custom remaps.
+- `Cmd` is a logical Chostty modifier that matches either Linux `Meta` or Linux `Super` for custom remaps.
 - App-global shortcuts still fire inside editable widgets, but surface and browser shortcuts bypass editable widgets so native text editing keeps working.
 
 ## Keybinds Editor
@@ -180,9 +180,9 @@ That means a remap changes both the GTK accelerator registration and the capture
 
 ## Pass-Through Behavior
 
-If a key combo does not match a resolved Limux shortcut, Limux does not intercept it and Ghostty receives it.
+If a key combo does not match a resolved Chostty shortcut, Chostty does not intercept it and Ghostty receives it.
 
-That means terminal-native combos like these should pass through unless you explicitly bind them in Limux:
+That means terminal-native combos like these should pass through unless you explicitly bind them in Chostty:
 
 - `Ctrl+C`
 - `Ctrl+L`
@@ -228,16 +228,16 @@ Note:
 From the repo root:
 
 ```bash
-cargo test -p limux-host-linux
-cargo build -p limux-host-linux --features webkit
-cargo build -p limux-host-linux --no-default-features
+cargo test -p chostty-host-linux
+cargo build -p chostty-host-linux --features webkit
+cargo build -p chostty-host-linux --no-default-features
 ```
 
 Run the app for manual testing:
 
 ```bash
 LD_LIBRARY_PATH="/home/willr/Applications/cmux-linux/cmux/ghostty/zig-out/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-cargo run -p limux-host-linux --features webkit --bin limux
+cargo run -p chostty-host-linux --features webkit --bin chostty
 ```
 
 ## Manual Test Plan
@@ -247,10 +247,10 @@ cargo run -p limux-host-linux --features webkit --bin limux
 Remove or move the config file out of the way:
 
 ```bash
-trash ~/.config/limux/config.json
+trash ~/.config/chostty/config.json
 ```
 
-Launch Limux and verify:
+Launch Chostty and verify:
 
 - `Ctrl+M` toggles the sidebar
 - `Ctrl+Shift+M` toggles the top bar
@@ -262,8 +262,8 @@ Launch Limux and verify:
 - `Ctrl+Page_Down` and `Ctrl+Page_Up` switch workspaces
 - `Ctrl+Shift+Page_Down` and `Ctrl+Shift+Page_Up` move the active workspace
 - pane button tooltips show the default shortcut suffixes where applicable
-- `Ctrl+Q` quits Limux
-- `Ctrl+Alt+N` opens a second Limux instance
+- `Ctrl+Q` quits Chostty
+- `Ctrl+Alt+N` opens a second Chostty instance
 - `Ctrl+K` clears terminal scrollback
 - `Ctrl+Shift+0` resets terminal font size
 
@@ -279,7 +279,7 @@ Create:
 }
 ```
 
-Restart Limux and verify:
+Restart Chostty and verify:
 
 - `Ctrl+Alt+B` toggles the sidebar
 - `Ctrl+M` no longer toggles the sidebar
@@ -296,11 +296,11 @@ Create:
 }
 ```
 
-Restart Limux and verify:
+Restart Chostty and verify:
 
-- `Ctrl+D` no longer triggers split-right in Limux
+- `Ctrl+D` no longer triggers split-right in Chostty
 - the split-right button tooltip no longer shows a shortcut suffix
-- in a terminal pane, `Ctrl+D` now reaches the terminal app instead of being intercepted by Limux
+- in a terminal pane, `Ctrl+D` now reaches the terminal app instead of being intercepted by Chostty
 
 ### 4. Verify Tab-Close Shortcut Remap
 
@@ -315,7 +315,7 @@ Create:
 }
 ```
 
-Restart Limux and verify:
+Restart Chostty and verify:
 
 - the new terminal pane button tooltip shows `Ctrl+Alt+T`
 - `Ctrl+Alt+T` opens a terminal tab
@@ -336,16 +336,16 @@ Create:
 }
 ```
 
-Restart Limux from a terminal and verify:
+Restart Chostty from a terminal and verify:
 
-- Limux prints a warning about duplicate bindings
-- Limux falls back to defaults
+- Chostty prints a warning about duplicate bindings
+- Chostty falls back to defaults
 - `Ctrl+M` toggles the sidebar
 - `Ctrl+D` still splits right
 
 ### 6. Open The Keybinds Editor
 
-Launch Limux, right-click inside a terminal, and verify:
+Launch Chostty, right-click inside a terminal, and verify:
 
 - the terminal context menu contains `Keybinds`
 - clicking `Keybinds` opens the keybind editor popover
@@ -356,19 +356,19 @@ Launch Limux, right-click inside a terminal, and verify:
 
 ### 7. Remap From The Editor
 
-Launch Limux, open terminal `Keybinds`, click the `Split Right` binding, and press `Ctrl+H`.
+Launch Chostty, open terminal `Keybinds`, click the `Split Right` binding, and press `Ctrl+H`.
 
 Verify:
 
 - the `Split Right` row updates to `Ctrl+H`
-- `~/.config/limux/config.json` contains the `split_right` override
-- `Ctrl+H` splits right immediately without restarting Limux
+- `~/.config/chostty/config.json` contains the `split_right` override
+- `Ctrl+H` splits right immediately without restarting Chostty
 - `Ctrl+D` no longer splits right
 - the pane header split-right tooltip now shows `Ctrl+H`
 
 ### 8. Editor Validation
 
-Launch Limux, open terminal `Keybinds`, and try these invalid captures on any row:
+Launch Chostty, open terminal `Keybinds`, and try these invalid captures on any row:
 
 - press only `Shift+H`
 - press only `Ctrl`
@@ -395,7 +395,7 @@ Create:
 
 Restart and verify:
 
-- Limux warns that the unknown ID was ignored
+- Chostty warns that the unknown ID was ignored
 - `toggle_sidebar` still remaps correctly
 
 ### 10. Invalid JSON Fallback
@@ -406,10 +406,10 @@ Write invalid JSON:
 { this is not valid json
 ```
 
-Restart Limux from a terminal and verify:
+Restart Chostty from a terminal and verify:
 
-- Limux prints a warning
-- Limux falls back to defaults
+- Chostty prints a warning
+- Chostty falls back to defaults
 - default shortcuts work again
 
 ### 11. Cmd Alias Policy
@@ -424,7 +424,7 @@ Create:
 }
 ```
 
-Restart Limux and verify:
+Restart Chostty and verify:
 
 - the keybind editor displays `Cmd+L`
 - either the physical `Meta+L` or `Super+L` combination focuses the browser address bar
@@ -485,7 +485,7 @@ That covers:
 
 ## Relevant Source Files
 
-- `rust/limux-host-linux/src/shortcut_config.rs`
-- `rust/limux-host-linux/src/main.rs`
-- `rust/limux-host-linux/src/window.rs`
-- `rust/limux-host-linux/src/pane.rs`
+- `rust/chostty-host-linux/src/shortcut_config.rs`
+- `rust/chostty-host-linux/src/main.rs`
+- `rust/chostty-host-linux/src/window.rs`
+- `rust/chostty-host-linux/src/pane.rs`
