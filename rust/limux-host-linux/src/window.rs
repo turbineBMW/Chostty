@@ -41,18 +41,18 @@ struct Workspace {
     favorite_button: gtk::Button,
     /// Notification dot in the sidebar row.
     notify_dot: gtk::Label,
-    /// Notification message label in the sidebar row.
-    notify_label: gtk::Label,
     /// Whether this workspace has unread notifications.
     unread: bool,
+    /// Whether hidden attention already triggered a sound for the active
+    /// workspace while the window was unfocused.
+    attention_notified_while_window_inactive: bool,
     /// Whether this workspace is favorited/pinned to top.
     favorite: bool,
     /// Last known working directory from the terminal (via OSC 7).
     cwd: Rc<RefCell<Option<String>>>,
     /// The folder path this workspace was opened with.
     folder_path: Option<String>,
-    /// Path label shown below workspace name in sidebar.
-    #[allow(dead_code)]
+    /// Path label shown below workspace name in sidebar (also used for notification messages).
     path_label: gtk::Label,
 }
 
@@ -688,11 +688,23 @@ pub(crate) fn apply_split_ratio_after_layout(
         let _ = apply_ratio(&paned_for_idle);
     });
 
-    let paned_for_map = paned.clone();
     // Hidden workspaces may not have a real allocation during initial restore, so retry when the
     // split is actually mapped instead of collapsing the divider to an arbitrary fallback pixel.
-    paned.connect_map(move |_| {
-        let _ = apply_ratio(&paned_for_map);
+    // Read the current ratio from the paned's stored state rather than the initial value, so that
+    // user-resized splits are preserved across workspace switches.
+    paned.connect_map(move |paned| {
+        let current_ratio = split_ratio_state(paned)
+            .map(|r| *r.borrow())
+            .unwrap_or(ratio);
+        let allocation = paned.allocation();
+        let size = if orientation == gtk::Orientation::Horizontal {
+            allocation.width()
+        } else {
+            allocation.height()
+        };
+        if size > 0 {
+            paned.set_position(layout_state::split_position_from_ratio(current_ratio, size));
+        }
     });
 }
 
@@ -771,7 +783,27 @@ const BASE_CSS: &str = r#"
     background-color: transparent;
 }
 .limux-window paned > separator {
-    background-color: @limux_divider_color;
+    background-color: transparent;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    border: none;
+    box-shadow: none;
+}
+.limux-window paned.limux-split-paned > separator {
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    border: none;
+    box-shadow: none;
+}
+.limux-window paned.limux-split-paned.horizontal > separator {
+    border-right: 1px solid @limux_divider_color;
+}
+.limux-window paned.limux-split-paned.vertical > separator {
+    border-bottom: 1px solid @limux_divider_color;
 }
 .limux-sidebar {
     background-color: @window_bg_color;
@@ -1002,8 +1034,6 @@ row:selected .limux-ws-path {
 }
 "#;
 
-const CONTENT_BACKGROUND_RGB: (u8, u8, u8) = (23, 23, 23);
-
 // ---------------------------------------------------------------------------
 // Window construction
 // ---------------------------------------------------------------------------
@@ -1021,8 +1051,6 @@ pub fn build_window(app: &adw::Application) {
         eprintln!("limux: {warning}");
     }
     let config = Rc::new(RefCell::new(loaded_config.config));
-    let background_opacity =
-        sanitize_background_opacity(crate::terminal::ghostty_background_opacity());
 
     let shortcuts = Rc::new(shortcut_config::load_shortcuts_for_display(&display));
     for warning in &shortcuts.warnings {
@@ -1033,7 +1061,7 @@ pub fn build_window(app: &adw::Application) {
     let provider = gtk::CssProvider::new();
     let all_css = format!(
         "{}\n{}\n{}\n{}",
-        build_window_css(background_opacity),
+        build_window_css(),
         pane::PANE_CSS,
         keybind_editor::KEYBIND_EDITOR_CSS,
         crate::settings_editor::SETTINGS_CSS,
@@ -1084,7 +1112,6 @@ pub fn build_window(app: &adw::Application) {
         .default_height(900)
         .build();
     window.add_css_class("limux-window");
-    apply_window_background_class(&window, background_opacity);
 
     // On Wayland compositors with xdg-decoration support, the compositor
     // already provides the window chrome, so keep Limux from rendering a
@@ -1235,6 +1262,7 @@ pub fn build_window(app: &adw::Application) {
     let main_paned = gtk::Paned::builder()
         .orientation(gtk::Orientation::Horizontal)
         .position(220)
+        .wide_handle(false)
         .resize_start_child(false)
         .resize_end_child(true)
         .shrink_start_child(false)
@@ -1290,6 +1318,15 @@ pub fn build_window(app: &adw::Application) {
                 system_prefers_dark.get(),
                 &state.borrow().config.borrow().appearance,
             );
+        });
+    }
+    {
+        let state = state.clone();
+        window.connect_is_active_notify(move |window| {
+            if !window.is_active() {
+                return;
+            }
+            clear_active_workspace_hidden_attention(&state);
         });
     }
 
@@ -1459,32 +1496,8 @@ pub fn build_window(app: &adw::Application) {
     window.present();
 }
 
-fn build_window_css(background_opacity: f64) -> String {
-    let background_opacity = sanitize_background_opacity(background_opacity);
-    let (r, g, b) = CONTENT_BACKGROUND_RGB;
-    format!(
-        "{BASE_CSS}\n.limux-content {{\n    background-color: rgba({r}, {g}, {b}, {background_opacity:.3});\n}}\n"
-    )
-}
-
-fn sanitize_background_opacity(background_opacity: f64) -> f64 {
-    if background_opacity.is_finite() {
-        background_opacity.clamp(0.0, 1.0)
-    } else {
-        1.0
-    }
-}
-
-fn use_opaque_window_background(background_opacity: f64) -> bool {
-    sanitize_background_opacity(background_opacity) >= 1.0
-}
-
-fn apply_window_background_class(window: &adw::ApplicationWindow, background_opacity: f64) {
-    if use_opaque_window_background(background_opacity) {
-        window.add_css_class("background");
-    } else {
-        window.remove_css_class("background");
-    }
+fn build_window_css() -> &'static str {
+    BASE_CSS
 }
 
 // ---------------------------------------------------------------------------
@@ -2259,7 +2272,6 @@ fn build_sidebar_row(
     gtk::Button,
     gtk::Label,
     gtk::Label,
-    gtk::Label,
 ) {
     let notify_dot = gtk::Label::builder().label("\u{25CF}").build();
     notify_dot.add_css_class("limux-notify-dot-hidden");
@@ -2299,14 +2311,6 @@ fn build_sidebar_row(
         path_label.set_visible(false);
     }
 
-    let notify_label = gtk::Label::builder()
-        .xalign(0.0)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .visible(false)
-        .margin_start(8)
-        .build();
-    notify_label.add_css_class("limux-notify-msg");
-
     let vbox = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(2)
@@ -2314,7 +2318,6 @@ fn build_sidebar_row(
     vbox.add_css_class("limux-sidebar-row-box");
     vbox.append(&top_row);
     vbox.append(&path_label);
-    vbox.append(&notify_label);
 
     let row = gtk::ListBoxRow::new();
     row.set_child(Some(&vbox));
@@ -2324,7 +2327,6 @@ fn build_sidebar_row(
         name_label,
         favorite_button,
         notify_dot,
-        notify_label,
         path_label,
     )
 }
@@ -2881,7 +2883,7 @@ fn create_workspace_for_tab(state: &State, payload: &str) -> bool {
     let split_container = SplitTreeContainer::new(state, pane.clone().upcast());
     let root = split_container.widget().clone();
 
-    let (row, name_label, favorite_button, notify_dot, notify_label, path_label) =
+    let (row, name_label, favorite_button, notify_dot, path_label) =
         build_sidebar_row(&seed.name, seed.folder_path.as_deref());
     let row_clone = row.clone();
     {
@@ -2899,8 +2901,8 @@ fn create_workspace_for_tab(state: &State, payload: &str) -> bool {
             name_label,
             favorite_button,
             notify_dot,
-            notify_label,
             unread: false,
+            attention_notified_while_window_inactive: false,
             favorite: false,
             cwd: Rc::new(RefCell::new(seed.cwd.clone())),
             folder_path: seed.folder_path.clone(),
@@ -3487,7 +3489,7 @@ fn add_workspace_from_state(state: &State, workspace: &WorkspaceState) {
         build_workspace_root(state, &shortcuts, &id, working_dir, &workspace.layout);
     stack.add_named(&root, Some(&stack_name));
 
-    let (row, name_label, favorite_button, notify_dot, notify_label, path_label) =
+    let (row, name_label, favorite_button, notify_dot, path_label) =
         build_sidebar_row(&workspace.name, workspace.folder_path.as_deref());
     sidebar_list.append(&row);
     install_workspace_row_interactions(state, &id, &row, &favorite_button);
@@ -3502,8 +3504,8 @@ fn add_workspace_from_state(state: &State, workspace: &WorkspaceState) {
         name_label,
         favorite_button,
         notify_dot,
-        notify_label,
         unread: false,
+        attention_notified_while_window_inactive: false,
         favorite: workspace.favorite,
         cwd,
         folder_path: workspace.folder_path.clone(),
@@ -3754,12 +3756,17 @@ fn switch_workspace(state: &State, idx: usize) {
         let unread_handles = if s.workspaces[idx].unread {
             let ws = &mut s.workspaces[idx];
             ws.unread = false;
+            ws.attention_notified_while_window_inactive = false;
             Some((
                 ws.notify_dot.clone(),
-                ws.notify_label.clone(),
+                ws.path_label.clone(),
                 ws.sidebar_row.clone(),
+                ws.folder_path.clone(),
             ))
         } else {
+            if let Some(ws) = s.workspaces.get_mut(idx) {
+                ws.attention_notified_while_window_inactive = false;
+            }
             None
         };
 
@@ -3771,12 +3778,20 @@ fn switch_workspace(state: &State, idx: usize) {
         focus_workspace_entrypoint(&focus_root);
     });
 
-    if let Some((notify_dot, notify_label, sidebar_row)) = unread_handles {
+    if let Some((notify_dot, path_label, sidebar_row, folder_path)) = unread_handles {
         notify_dot.remove_css_class("limux-notify-dot");
         notify_dot.add_css_class("limux-notify-dot-hidden");
-        notify_label.remove_css_class("limux-notify-msg-unread");
-        notify_label.add_css_class("limux-notify-msg");
-        notify_label.set_visible(false);
+        // Restore the path label from notification message back to folder path
+        path_label.remove_css_class("limux-notify-msg-unread");
+        path_label.add_css_class("limux-ws-path");
+        if let Some(ref p) = folder_path {
+            path_label.set_label(&abbreviate_path(p));
+            path_label.set_tooltip_text(Some(p.as_str()));
+            path_label.set_visible(true);
+        } else {
+            path_label.set_label("");
+            path_label.set_visible(false);
+        }
         if let Some(row_box) = sidebar_row.child() {
             row_box.remove_css_class("limux-sidebar-row-unread");
         }
@@ -4500,6 +4515,7 @@ fn mark_workspace_unread_with_message(state: &State, ws_id: &str, message: &str)
     let sound = {
         let mut s = state.borrow_mut();
         let active_idx = s.active_idx;
+        let window_is_active = s.window.is_active();
         let Some((idx, ws)) = s
             .workspaces
             .iter_mut()
@@ -4509,20 +4525,27 @@ fn mark_workspace_unread_with_message(state: &State, ws_id: &str, message: &str)
             return;
         };
 
-        let should_play =
-            notification_sound::should_play_for_unread_transition(idx == active_idx, ws.unread);
+        let workspace_is_visible = idx == active_idx && window_is_active;
+        let already_notified = ws.unread || ws.attention_notified_while_window_inactive;
+        let should_play = notification_sound::should_play_for_attention_transition(
+            workspace_is_visible,
+            already_notified,
+        );
         if idx != active_idx {
             ws.unread = true;
             ws.notify_dot.remove_css_class("limux-notify-dot-hidden");
             ws.notify_dot.add_css_class("limux-notify-dot");
-            ws.notify_label.set_label(message);
-            ws.notify_label.remove_css_class("limux-notify-msg");
-            ws.notify_label.add_css_class("limux-notify-msg-unread");
-            ws.notify_label.set_visible(true);
+            // Replace the path label text with the notification message
+            ws.path_label.set_label(message);
+            ws.path_label.remove_css_class("limux-ws-path");
+            ws.path_label.add_css_class("limux-notify-msg-unread");
+            ws.path_label.set_visible(true);
             // Add glow pulse to the sidebar row box
             if let Some(row_box) = ws.sidebar_row.child() {
                 row_box.add_css_class("limux-sidebar-row-unread");
             }
+        } else if !window_is_active {
+            ws.attention_notified_while_window_inactive = true;
         }
 
         if should_play {
@@ -4537,6 +4560,14 @@ fn mark_workspace_unread_with_message(state: &State, ws_id: &str, message: &str)
     }
 }
 
+fn clear_active_workspace_hidden_attention(state: &State) {
+    let mut s = state.borrow_mut();
+    let active_idx = s.active_idx;
+    if let Some(workspace) = s.workspaces.get_mut(active_idx) {
+        workspace.attention_notified_while_window_inactive = false;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -4548,13 +4579,13 @@ mod tests {
     use super::{
         build_window_css, clamp_workspace_insert_index_for_pinning, favorites_prefix_len,
         ghostty_prefers_dark, gtk_system_prefers_dark_from_raw, next_active_workspace_index,
-        queue_session_save_request, resolved_system_prefers_dark, sanitize_background_opacity,
+        queue_session_save_request, resolved_system_prefers_dark,
         shortcut_allowed_while_browser_find_active, shortcut_blocked_by_editable,
         shortcut_command_from_key_event, shortcut_dispatch_propagation,
         should_confirm_last_tab_close_for_workspace_destruction, tab_drag_workspace_seed,
-        use_opaque_window_background, workspace_drop_layout_path, workspace_notification_message,
-        EditableCaptureContext, PortalColorSchemePreference, SessionSaveAccess, SessionSaveRequest,
-        WorkspaceSeedSource, BASE_CSS, HOST_ENTRY_CSS_CLASS, WORKSPACE_RENAME_ENTRY_CSS_CLASS,
+        workspace_drop_layout_path, workspace_notification_message, EditableCaptureContext,
+        PortalColorSchemePreference, SessionSaveAccess, SessionSaveRequest, WorkspaceSeedSource,
+        BASE_CSS, HOST_ENTRY_CSS_CLASS, WORKSPACE_RENAME_ENTRY_CSS_CLASS,
         WORKSPACE_RENAME_ENTRY_CSS_CLASSES,
     };
     use crate::layout_state::{LayoutNodeState, PaneState, SplitOrientation, SplitState};
@@ -4589,29 +4620,18 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_background_opacity_clamps_invalid_values() {
-        assert_eq!(sanitize_background_opacity(f64::NAN), 1.0);
-        assert_eq!(sanitize_background_opacity(-0.2), 0.0);
-        assert_eq!(sanitize_background_opacity(1.7), 1.0);
-        assert_eq!(sanitize_background_opacity(0.42), 0.42);
-    }
-
-    #[test]
-    fn transparent_window_background_only_applies_below_full_opacity() {
-        assert!(!use_opaque_window_background(0.8));
-        assert!(use_opaque_window_background(1.0));
-        assert!(use_opaque_window_background(5.0));
-        assert!(use_opaque_window_background(f64::NAN));
-    }
-
-    #[test]
-    fn build_window_css_uses_resolved_background_opacity() {
-        let css = build_window_css(0.42);
+    fn build_window_css_preserves_transparent_content_background() {
+        let css = build_window_css();
         assert!(css.contains(".limux-host-entry"));
         assert!(css.contains(".limux-host-entry text"));
         assert!(css.contains(".limux-host-entry text placeholder"));
+        assert!(css.contains(".limux-window paned > separator"));
+        assert!(css.contains("min-width: 0;"));
+        assert!(css.contains("paned.limux-split-paned > separator"));
+        assert!(css.contains("paned.limux-split-paned.horizontal > separator"));
+        assert!(css.contains("paned.limux-split-paned.vertical > separator"));
         assert!(css.contains(".limux-content"));
-        assert!(css.contains("background-color: rgba(23, 23, 23, 0.420);"));
+        assert!(css.contains(".limux-content {\n    background-color: transparent;"));
     }
 
     #[test]

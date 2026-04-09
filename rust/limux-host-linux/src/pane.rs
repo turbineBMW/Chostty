@@ -300,7 +300,7 @@ pub const PANE_CSS: &str = r#"
     border-right-color: transparent;
     box-shadow: inset 0 0 0 1px alpha(@window_fg_color, 0.035);
 }
-.limux-tab-active {
+.limux-pane-focused .limux-tab-active {
     color: @window_fg_color;
     background: alpha(@window_fg_color, 0.115);
     border-radius: 10px;
@@ -479,6 +479,7 @@ pub fn create_pane(
     let tab_state = Rc::new(RefCell::new(TabState {
         tabs: Vec::new(),
         active_tab: None,
+        pane_focused: false,
     }));
     let workspace_dragging = Rc::new(Cell::new(false));
     let pane_id = next_pane_id();
@@ -509,6 +510,27 @@ pub fn create_pane(
     unsafe {
         outer.set_data("limux-pane-internals", internals);
     }
+
+    // Track focus: add/remove .limux-pane-focused on the outer box so CSS
+    // can style the active tab differently in the focused vs unfocused pane.
+    {
+        let header_for_focus = header.clone();
+        let tab_state_for_focus = tab_state.clone();
+        outer.connect_state_flags_changed(move |widget, _| {
+            let has_focus = widget.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN);
+            if has_focus {
+                header_for_focus.add_css_class("limux-pane-focused");
+            } else {
+                header_for_focus.remove_css_class("limux-pane-focused");
+            }
+            let prev = tab_state_for_focus.borrow().pane_focused;
+            if prev != has_focus {
+                tab_state_for_focus.borrow_mut().pane_focused = has_focus;
+                sync_tab_separator_classes(&tab_state_for_focus);
+            }
+        });
+    }
+
     outer.connect_destroy(move |_| {
         unregister_pane(pane_id);
     });
@@ -599,6 +621,21 @@ pub fn focus_active_tab_in_pane(pane_widget: &gtk::Widget) -> bool {
         &internals.tab_state,
         &tab_id,
     );
+
+    // activate_tab short-circuits if the tab is already active, but we still
+    // need to grab focus (e.g. when refocusing a sibling pane after a split
+    // pane is closed).
+    let ts = internals.tab_state.borrow();
+    if let Some(entry) = ts.tabs.iter().find(|e| e.id == tab_id) {
+        let content = entry.content.clone();
+        drop(ts);
+        if content.is_focus() || content.can_focus() {
+            content.grab_focus();
+        } else {
+            content.child_focus(gtk::DirectionType::TabForward);
+        }
+    }
+
     true
 }
 
@@ -665,6 +702,7 @@ struct TabEntry {
 struct TabState {
     tabs: Vec<TabEntry>,
     active_tab: Option<String>,
+    pane_focused: bool,
 }
 
 /// Shared internals stored on the pane outer Box for external access.
@@ -2068,8 +2106,11 @@ fn sync_tab_separator_classes(tab_state: &Rc<RefCell<TabState>>) {
         .active_tab
         .as_deref()
         .and_then(|active_id| state.tabs.iter().position(|entry| entry.id == active_id));
+
     for (idx, entry) in state.tabs.iter().enumerate() {
-        let next_is_active = active_idx == Some(idx + 1);
+        // Only suppress the separator next to the active tab when the pane is focused
+        // (unfocused active tabs look like inactive tabs, so they need separators).
+        let next_is_active = state.pane_focused && active_idx == Some(idx + 1);
         if idx < last_idx && !next_is_active {
             entry.tab_button.add_css_class("limux-tab-separator");
         } else {
@@ -2494,26 +2535,33 @@ fn remove_tab(
     pane_outer: &gtk::Box,
     empty_reason: PaneEmptyReason,
 ) {
-    let mut ts = tab_state.borrow_mut();
-    let Some(idx) = ts.tabs.iter().position(|e| e.id == tab_id) else {
-        return;
+    let (entry, is_empty, new_id, was_active) = {
+        let mut ts = tab_state.borrow_mut();
+        let Some(idx) = ts.tabs.iter().position(|e| e.id == tab_id) else {
+            return;
+        };
+        let entry = ts.tabs.remove(idx);
+        let is_empty = ts.tabs.is_empty();
+        let (new_id, was_active) = if is_empty {
+            (String::new(), false)
+        } else {
+            let new_idx = idx.min(ts.tabs.len() - 1);
+            let new_id = ts.tabs[new_idx].id.clone();
+            let was_active = ts.active_tab.as_deref() == Some(tab_id);
+            (new_id, was_active)
+        };
+        (entry, is_empty, new_id, was_active)
     };
-    let entry = ts.tabs.remove(idx);
-
+    // Remove widgets after dropping the borrow — unparenting fires GTK
+    // signals (state-flags-changed) whose callbacks borrow `tab_state`.
     tab_strip.remove(&entry.tab_button);
     content_stack.remove(&entry.content);
 
-    if ts.tabs.is_empty() {
-        drop(ts);
+    if is_empty {
         (callbacks.on_empty)(&pane_outer.clone().upcast(), empty_reason);
         return;
     }
 
-    // Activate neighbor tab
-    let new_idx = idx.min(ts.tabs.len() - 1);
-    let new_id = ts.tabs[new_idx].id.clone();
-    let was_active = ts.active_tab.as_deref() == Some(tab_id);
-    drop(ts);
     sync_tab_separator_classes(tab_state);
 
     if was_active {

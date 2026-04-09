@@ -68,6 +68,35 @@ impl SplitNode {
         }
     }
 
+    /// Return the first leaf widget in the subtree (depth-first, leftmost).
+    fn first_leaf(&self) -> &gtk::Widget {
+        match self {
+            SplitNode::Leaf { pane_widget } => pane_widget,
+            SplitNode::Split { left, .. } => left.first_leaf(),
+        }
+    }
+
+    /// Find the sibling subtree's first leaf for the given target.
+    /// When `target` is removed, its sibling is promoted — this returns
+    /// the first leaf of that sibling so we can focus it.
+    fn sibling_first_leaf(&self, target: &gtk::Widget) -> Option<&gtk::Widget> {
+        match self {
+            SplitNode::Leaf { .. } => None,
+            SplitNode::Split { left, right, .. } => {
+                if matches!(left.as_ref(), SplitNode::Leaf { pane_widget } if pane_widget == target)
+                {
+                    Some(right.first_leaf())
+                } else if matches!(right.as_ref(), SplitNode::Leaf { pane_widget } if pane_widget == target)
+                {
+                    Some(left.first_leaf())
+                } else {
+                    left.sibling_first_leaf(target)
+                        .or_else(|| right.sibling_first_leaf(target))
+                }
+            }
+        }
+    }
+
     /// Find the leaf containing `target` and promote its sibling in place.
     pub(crate) fn remove(&mut self, target: &gtk::Widget) -> bool {
         match self {
@@ -137,7 +166,8 @@ pub(crate) struct SplitTreeContainer {
     tree: RefCell<SplitNode>,
     bin: gtk::Box,
     rebuild_source: RefCell<Option<glib::SourceId>>,
-    last_focused: RefCell<Option<gtk::Widget>>,
+    focused_pane: RefCell<Option<gtk::Widget>>,
+    previous_focused_pane: RefCell<Option<gtk::Widget>>,
     state: State,
 }
 
@@ -149,15 +179,18 @@ impl SplitTreeContainer {
         bin.set_vexpand(true);
         bin.append(&initial_pane);
 
-        Rc::new(Self {
+        let container = Rc::new(Self {
             tree: RefCell::new(SplitNode::Leaf {
                 pane_widget: initial_pane,
             }),
             bin,
             rebuild_source: RefCell::new(None),
-            last_focused: RefCell::new(None),
+            focused_pane: RefCell::new(None),
+            previous_focused_pane: RefCell::new(None),
             state: state.clone(),
-        })
+        });
+        container.install_focus_tracking_for_tree();
+        container
     }
 
     /// Create a container from a pre-built tree (for session restore).
@@ -170,13 +203,16 @@ impl SplitTreeContainer {
         let widget = build_widget_tree(&node, state);
         bin.append(&widget);
 
-        Rc::new(Self {
+        let container = Rc::new(Self {
             tree: RefCell::new(node),
             bin,
             rebuild_source: RefCell::new(None),
-            last_focused: RefCell::new(None),
+            focused_pane: RefCell::new(None),
+            previous_focused_pane: RefCell::new(None),
             state: state.clone(),
-        })
+        });
+        container.install_focus_tracking_for_tree();
+        container
     }
 
     /// The container widget to add to the gtk::Stack.
@@ -203,8 +239,8 @@ impl SplitTreeContainer {
         new_pane_first: bool,
         ratio: f64,
     ) {
-        self.save_focus();
-        *self.last_focused.borrow_mut() = Some(new_pane.clone());
+        self.remember_focus(&new_pane);
+        self.install_focus_tracking_for_pane(&new_pane);
 
         let shared_ratio = Rc::new(RefCell::new(layout_state::clamp_split_ratio(ratio)));
         let new_node = if new_pane_first {
@@ -243,7 +279,15 @@ impl SplitTreeContainer {
 
     /// Remove a pane. Mutates the data model, then triggers async rebuild.
     pub(crate) fn remove(self: &Rc<Self>, target: &gtk::Widget) -> bool {
-        self.save_focus();
+        let next_focus = {
+            let tree = self.tree.borrow();
+            self.focus_target_after_removal(&tree, target)
+        };
+
+        *self.focused_pane.borrow_mut() = next_focus.clone();
+        if next_focus.is_some() {
+            *self.previous_focused_pane.borrow_mut() = None;
+        }
 
         let removed = {
             let mut tree = self.tree.borrow_mut();
@@ -303,20 +347,80 @@ impl SplitTreeContainer {
         // Newly created panes are tracked as pane containers rather than the
         // inner terminal/browser widget, so restore through the pane helper
         // when possible and fall back to plain widget focus otherwise.
-        if let Some(focused) = self.last_focused.borrow().as_ref() {
+        if let Some(focused) = self.focused_pane.borrow().as_ref() {
             if !pane::focus_active_tab_in_pane(focused) {
                 focused.grab_focus();
             }
         }
     }
 
-    fn save_focus(&self) {
-        let focus = self
-            .bin
-            .root()
-            .and_then(|r| r.downcast::<gtk::Window>().ok())
-            .and_then(|w| gtk::prelude::GtkWindowExt::focus(&w));
-        *self.last_focused.borrow_mut() = focus;
+    fn install_focus_tracking_for_tree(self: &Rc<Self>) {
+        let tree = self.tree.borrow();
+        self.install_focus_tracking_for_node(&tree);
+    }
+
+    fn install_focus_tracking_for_node(self: &Rc<Self>, node: &SplitNode) {
+        match node {
+            SplitNode::Leaf { pane_widget } => self.install_focus_tracking_for_pane(pane_widget),
+            SplitNode::Split { left, right, .. } => {
+                self.install_focus_tracking_for_node(left);
+                self.install_focus_tracking_for_node(right);
+            }
+        }
+    }
+
+    fn install_focus_tracking_for_pane(self: &Rc<Self>, pane_widget: &gtk::Widget) {
+        const FOCUS_TRACKING_KEY: &str = "limux-split-tree-focus-tracking-installed";
+        let already_installed = unsafe { pane_widget.data::<bool>(FOCUS_TRACKING_KEY).is_some() };
+        if already_installed {
+            return;
+        }
+        unsafe {
+            pane_widget.set_data(FOCUS_TRACKING_KEY, true);
+        }
+
+        let container = Rc::downgrade(self);
+        let tracked_pane = pane_widget.clone();
+        pane_widget.connect_state_flags_changed(move |widget, _| {
+            if !widget.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN) {
+                return;
+            }
+            if let Some(container) = container.upgrade() {
+                container.remember_focus(&tracked_pane);
+            }
+        });
+    }
+
+    fn remember_focus(&self, pane_widget: &gtk::Widget) {
+        let current = self.focused_pane.borrow().clone();
+        if current.as_ref() == Some(pane_widget) {
+            return;
+        }
+
+        *self.previous_focused_pane.borrow_mut() = current;
+        *self.focused_pane.borrow_mut() = Some(pane_widget.clone());
+    }
+
+    fn focus_target_after_removal(
+        &self,
+        tree: &SplitNode,
+        target: &gtk::Widget,
+    ) -> Option<gtk::Widget> {
+        let current = self.focused_pane.borrow().clone();
+        if let Some(current) = current {
+            if current != *target && tree.contains_pane(&current) {
+                return Some(current);
+            }
+        }
+
+        let previous = self.previous_focused_pane.borrow().clone();
+        if let Some(previous) = previous {
+            if previous != *target && tree.contains_pane(&previous) {
+                return Some(previous);
+            }
+        }
+
+        tree.sibling_first_leaf(target).cloned()
     }
 }
 
@@ -374,7 +478,9 @@ fn build_widget_tree(node: &SplitNode, state: &State) -> gtk::Widget {
                 .orientation(*orientation)
                 .hexpand(true)
                 .vexpand(true)
+                .wide_handle(false)
                 .build();
+            paned.add_css_class("limux-split-paned");
 
             let ratio_val = *ratio.borrow();
             update_split_ratio_state(&paned, ratio_val);

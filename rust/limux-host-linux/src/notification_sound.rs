@@ -6,8 +6,11 @@ use crate::app_config::NotificationSoundConfig;
 const PRIMARY_THEME_EVENT_ID: &str = "complete";
 const FALLBACK_THEME_EVENT_ID: &str = "message";
 
-pub fn should_play_for_unread_transition(is_target_active: bool, was_unread: bool) -> bool {
-    !is_target_active && !was_unread
+pub fn should_play_for_attention_transition(
+    is_target_visible: bool,
+    already_notified: bool,
+) -> bool {
+    !is_target_visible && !already_notified
 }
 
 pub fn play(sound: &NotificationSoundConfig) {
@@ -59,13 +62,13 @@ fn spawn_canberra_play_id(event_id: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::should_play_for_unread_transition;
+    use super::should_play_for_attention_transition;
 
     #[test]
-    fn plays_only_for_first_unread_transition_of_inactive_workspace() {
-        assert!(should_play_for_unread_transition(false, false));
-        assert!(!should_play_for_unread_transition(true, false));
-        assert!(!should_play_for_unread_transition(false, true));
-        assert!(!should_play_for_unread_transition(true, true));
+    fn plays_only_for_first_attention_transition_of_hidden_target() {
+        assert!(should_play_for_attention_transition(false, false));
+        assert!(!should_play_for_attention_transition(true, false));
+        assert!(!should_play_for_attention_transition(false, true));
+        assert!(!should_play_for_attention_transition(true, true));
     }
 }

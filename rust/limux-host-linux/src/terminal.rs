@@ -22,7 +22,6 @@ use limux_ghostty_sys::*;
 
 struct GhosttyState {
     app: ghostty_app_t,
-    background_opacity: f64,
 }
 
 // Safety: ghostty_app_t is thread-safe for the operations we perform
@@ -348,8 +347,6 @@ pub fn init_ghostty() {
         }
 
         let config = load_ghostty_config();
-        let background_opacity = load_background_opacity(config);
-
         let runtime_config = ghostty_runtime_config_s {
             userdata: ptr::null_mut(),
             supports_selection_clipboard: true,
@@ -374,42 +371,12 @@ pub fn init_ghostty() {
             glib::ControlFlow::Continue
         });
 
-        GhosttyState {
-            app,
-            background_opacity,
-        }
+        GhosttyState { app }
     });
 }
 
 fn ghostty_app() -> ghostty_app_t {
     GHOSTTY.get().expect("ghostty not initialized").app
-}
-
-pub fn ghostty_background_opacity() -> f64 {
-    init_ghostty();
-    GHOSTTY
-        .get()
-        .map(|state| state.background_opacity)
-        .unwrap_or(1.0)
-}
-
-fn load_background_opacity(config: ghostty_config_t) -> f64 {
-    let mut opacity = 1.0_f64;
-    let key = b"background-opacity";
-    let loaded = unsafe {
-        ghostty_config_get(
-            config,
-            (&mut opacity as *mut f64).cast::<c_void>(),
-            key.as_ptr().cast::<c_char>(),
-            key.len(),
-        )
-    };
-
-    if loaded && opacity.is_finite() {
-        opacity.clamp(0.0, 1.0)
-    } else {
-        1.0
-    }
 }
 
 fn ghostty_color_scheme_for_dark_mode(dark: bool) -> c_int {
