@@ -13,29 +13,72 @@ https://github.com/user-attachments/assets/6f3047c2-e2b6-49f2-b536-570a1570d0f8
 - **Split panes** (horizontal/vertical) with keyboard navigation
 - **Tabbed terminals** within each pane
 - **Built-in browser** (WebKitGTK)
+- **Editable keybindings** from Settings with JSON-backed persistence
 - **Right-click context menu** with copy, paste, split, clear
 - **Drag-and-drop** workspace reordering with favorites/pinning
 - **Animated sidebar** collapse/expand
 
 ## Install
 
-Download the latest release from [GitHub Releases](https://github.com/turbineBMW/chostty/releases).
+Chostty does not currently publish official GitHub releases. Today the supported paths are:
 
-**Debian/Ubuntu (.deb)** — recommended:
+- build and run from source
+- generate local packages with `./scripts/package.sh`
+- use the unofficial AUR package on Arch Linux
+
+### Build from source
+
+#### Prerequisites
+
+- Rust toolchain (stable)
+- Zig
+- GTK4, libadwaita, WebKitGTK runtime and dev packages
+- Initialized Ghostty submodule
+
 ```bash
-sudo dpkg -i ./chostty_0.1.7_amd64.deb
+# Install dev dependencies (Ubuntu/Debian)
+sudo apt install libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev pkg-config build-essential
+
+# Initialize the Ghostty submodule and build the embedded library
+git submodule update --init --recursive
+(cd ghostty && zig build -Dapp-runtime=none -Doptimize=ReleaseFast)
+
+# Build chostty
+cargo build --release
+
+# Run (point to libghostty.so location)
+LD_LIBRARY_PATH=../ghostty/zig-out/lib:$LD_LIBRARY_PATH ./target/release/chostty
 ```
 
-**AppImage** — portable, no install needed:
+### Build local packages
+
 ```bash
-chmod +x Chostty-0.1.7-x86_64.AppImage
-./Chostty-0.1.7-x86_64.AppImage
+./scripts/package.sh
 ```
 
-**Tarball** — manual install:
+This creates installable artifacts in `dist/`:
+
+- `chostty_<version>_<arch>.deb`
+- `chostty-<version>-linux-<arch>.tar.gz`
+- `Chostty-<version>-<arch>.AppImage` when `appimagetool` is available
+
+Examples:
+
+**Debian/Ubuntu (.deb)**
 ```bash
-tar xzf chostty-*-linux-x86_64.tar.gz
-cd chostty-*-linux-x86_64
+sudo dpkg -i ./dist/chostty_<version>_<arch>.deb
+```
+
+**AppImage**
+```bash
+chmod +x ./dist/Chostty-<version>-<arch>.AppImage
+./dist/Chostty-<version>-<arch>.AppImage
+```
+
+**Tarball**
+```bash
+tar xzf ./dist/chostty-<version>-linux-<arch>.tar.gz
+cd chostty-<version>-linux-<arch>
 sudo ./install.sh
 ```
 
@@ -64,40 +107,7 @@ sudo apt install libgtk-4-1 libadwaita-1-0 libwebkitgtk-6.0-4
 
 Chostty now requires `libadwaita >= 1.5`, which is available in Ubuntu 24.04+ and Debian 13+.
 
-## Build from source
-
-### Prerequisites
-
-- Rust toolchain (stable)
-- Zig
-- GTK4, libadwaita, WebKitGTK dev packages
-- Initialized Ghostty submodule
-
-```bash
-# Install dev dependencies (Ubuntu/Debian)
-sudo apt install libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev pkg-config build-essential
-
-# Initialize the Ghostty submodule and build the embedded library
-git submodule update --init --recursive
-(cd ghostty && zig build -Dapp-runtime=none -Doptimize=ReleaseFast)
-
-# Build chostty
-cargo build --release
-
-# Run (point to libghostty.so location)
-LD_LIBRARY_PATH=../ghostty/zig-out/lib:$LD_LIBRARY_PATH ./target/release/chostty
-```
-
-### Package a release tarball
-
-```bash
-./scripts/package.sh
-```
-
-This builds the binary, bundles `libghostty.so`, icons, and an install script into a tarball.
-`package.sh` also rebuilds `libghostty.so` with `ReleaseFast`, so Zig and the initialized Ghostty submodule must be present.
-
-### Refresh Ghostty From Upstream
+## Refresh Ghostty From Upstream
 
 To replay Chostty's minimal embedded-Linux Ghostty patch queue onto the latest
 upstream Ghostty `main`:
@@ -135,14 +145,28 @@ Repository maintainability rules live in [`docs/maintainability.md`](docs/mainta
 
 Most default shortcuts use `Ctrl`. Fullscreen defaults to `F11`. Custom remaps may also use `Cmd`, which Chostty maps to either the Linux `Meta` or `Super` modifier. `Opt` maps to `Alt`.
 
+You can edit shortcuts from Settings > Keybindings. Remaps are stored in `~/.config/chostty/shortcuts.json`.
+
 ### App
 
 | Shortcut | Action |
 |---|---|
+| `Ctrl+Shift+N` | New workspace |
+| `Ctrl+Alt+R` | Rename active workspace |
+| `Ctrl+Shift+P` | Open workspace by path |
+| `Ctrl+Shift+W` | Close workspace |
 | `Ctrl+Q` | Quit Chostty |
 | `Ctrl+Alt+N` | Open a new Chostty instance |
 | `Ctrl+,` | Open settings |
+| `Ctrl+M` | Toggle sidebar |
+| `Ctrl+Shift+M` | Toggle top bar |
 | `F11` | Toggle fullscreen |
+| `Ctrl+PageDown` | Next workspace |
+| `Ctrl+PageUp` | Previous workspace |
+| `Ctrl+Shift+PageUp` | Move active workspace up |
+| `Ctrl+Shift+PageDown` | Move active workspace down |
+| `Ctrl+1-8` | Switch to workspace by number |
+| `Ctrl+9` | Switch to the last workspace in the list |
 
 ### Browser
 
@@ -181,20 +205,13 @@ Most default shortcuts use `Ctrl`. Fullscreen defaults to `F11`. Custom remaps m
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+Shift+N` | New workspace (folder picker) |
-| `Ctrl+Shift+W` | Close workspace |
 | `Ctrl+Shift+Left/Right` | Cycle tabs in focused pane |
 | `Ctrl+Shift+D` | Split down |
-| `Ctrl+Shift+T` | New terminal tab in the focused pane |
+| `Ctrl+Shift+T` | New terminal in focused pane |
 | `Ctrl+D` | Split right |
-| `Ctrl+W` | Close focused pane |
-| `Ctrl+M` | Toggle sidebar |
-| `Ctrl+Shift+M` | Toggle top bar |
+| `Ctrl+W` | Close the active tab in the focused pane |
 | `Ctrl+T` | New terminal tab |
 | `Ctrl+Arrow` | Focus pane in direction |
-| `Ctrl+PageDown/Up` | Next or previous workspace |
-| `Ctrl+Shift+PageDown/Up` | Move active workspace down or up |
-| `Ctrl+1-9` | Switch to workspace by number |
 
 ## Architecture
 
