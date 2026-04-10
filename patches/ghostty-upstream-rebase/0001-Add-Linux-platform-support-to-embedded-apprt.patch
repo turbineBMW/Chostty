@@ -1,0 +1,116 @@
+From e63b250c1c581ed3c84330b46c68f656ed157dd4 Mon Sep 17 00:00:00 2001
+From: FreeMeWat <freeme62410@gmail.com>
+Date: Tue, 17 Mar 2026 10:40:46 -0600
+Subject: [PATCH 1/3] Add Linux platform support to embedded apprt
+
+- Add GHOSTTY_PLATFORM_LINUX to PlatformTag and Platform union
+- Enable OpenGL prepareContext for embedded apprt (was a no-op TODO)
+- Set must_draw_from_app_thread=true on Linux (GL context is main-thread only)
+- Use drawFrame(false) in embedded draw() to avoid sync resize guard
+  that prevents FBO resize on Linux/GTK
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+---
+ src/apprt/embedded.zig  | 25 ++++++++++++++++++++++++-
+ src/renderer/OpenGL.zig |  7 ++++---
+ 2 files changed, 28 insertions(+), 4 deletions(-)
+
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index 519a35f2b..a5b29070b 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -26,6 +26,11 @@ const log = std.log.scoped(.embedded_window);
+ pub const resourcesDir = internal_os.resourcesDir;
+ 
+ pub const App = struct {
++    /// On Linux with OpenGL, draws must happen on the app/main thread
++    /// because the host's GL context (e.g., GTK GLArea) is only valid there.
++    /// On macOS with Metal, this is not needed since Metal handles threading.
++    pub const must_draw_from_app_thread = builtin.target.os.tag == .linux;
++
+     /// Because we only expect the embedding API to be used in embedded
+     /// environments, the options are extern so that we can expose it
+     /// directly to a C callconv and not pay for any translation costs.
+@@ -343,6 +348,7 @@ pub const App = struct {
+ pub const Platform = union(PlatformTag) {
+     macos: MacOS,
+     ios: IOS,
++    linux: Linux,
+ 
+     // If our build target for libghostty is not darwin then we do
+     // not include macos support at all.
+@@ -356,6 +362,10 @@ pub const Platform = union(PlatformTag) {
+         uiview: objc.Object,
+     } else void;
+ 
++    /// Linux platform. The host is responsible for ensuring a valid
++    /// OpenGL context is current before calling surface init and draw.
++    pub const Linux = struct {};
++
+     // The C ABI compatible version of this union. The tag is expected
+     // to be stored elsewhere.
+     pub const C = extern union {
+@@ -366,6 +376,10 @@ pub const Platform = union(PlatformTag) {
+         ios: extern struct {
+             uiview: ?*anyopaque,
+         },
++
++        linux: extern struct {
++            reserved: ?*anyopaque,
++        },
+     };
+ 
+     /// Initialize a Platform a tag and configuration from the C ABI.
+@@ -385,6 +399,8 @@ pub const Platform = union(PlatformTag) {
+                     break :ios error.UIViewMustBeSet);
+                 break :ios .{ .ios = .{ .uiview = uiview } };
+             } else error.UnsupportedPlatform,
++
++            .linux => if (builtin.target.os.tag == .linux) .{ .linux = .{} } else error.UnsupportedPlatform,
+         };
+     }
+ };
+@@ -395,6 +411,7 @@ pub const PlatformTag = enum(c_int) {
+ 
+     macos = 1,
+     ios = 2,
++    linux = 3,
+ };
+ 
+ pub const EnvVar = extern struct {
+@@ -767,7 +784,13 @@ pub const Surface = struct {
+     }
+ 
+     pub fn draw(self: *Surface) void {
+-        self.core_surface.draw() catch |err| {
++        // Use drawFrame(false) instead of the sync draw() path.
++        // CoreSurface.draw() calls drawFrame(true), which on size changes
++        // re-presents the last (stale) frame to avoid blank flashes during
++        // macOS CoreAnimation resize. On Linux/GTK, this prevents the
++        // renderer from ever updating to the new size. Using false lets
++        // the renderer detect the new GL viewport and resize its FBO.
++        self.core_surface.renderer.drawFrame(false) catch |err| {
+             log.err("error in draw err={}", .{err});
+             return;
+         };
+diff --git a/src/renderer/OpenGL.zig b/src/renderer/OpenGL.zig
+index 4b01da0c5..ef0596c6d 100644
+--- a/src/renderer/OpenGL.zig
++++ b/src/renderer/OpenGL.zig
+@@ -170,9 +170,10 @@ pub fn surfaceInit(surface: *apprt.Surface) !void {
+         => try prepareContext(null),
+ 
+         apprt.embedded => {
+-            // TODO(mitchellh): this does nothing today to allow libghostty
+-            // to compile for OpenGL targets but libghostty is strictly
+-            // broken for rendering on this platforms.
++            // The host must ensure a valid OpenGL context is current
++            // before calling surface init (e.g., via GLArea.make_current()).
++            // We load GL function pointers from the current context.
++            try prepareContext(null);
+         },
+     }
+ 
+-- 
+2.53.0
+

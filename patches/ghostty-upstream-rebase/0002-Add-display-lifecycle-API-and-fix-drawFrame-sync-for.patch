@@ -1,0 +1,75 @@
+From ea41ced2c754b42a032cdaa609fec89809e2cc51 Mon Sep 17 00:00:00 2001
+From: FreeMeWat <freeme62410@gmail.com>
+Date: Tue, 17 Mar 2026 13:22:27 -0600
+Subject: [PATCH 2/3] Add display lifecycle API and fix drawFrame sync for
+ embedded Linux
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Add ghostty_surface_display_unrealized/realized C API for GL context
+  recycling during widget reparenting (splits)
+- Change embedded Surface.draw() to use drawFrame(false) — the sync
+  path re-presents stale frames on resize (macOS CoreAnimation guard)
+- Allow embedded apprt to call displayRealized (OpenGL.zig)
+---
+ src/apprt/embedded.zig  | 19 +++++++++++++++++++
+ src/renderer/OpenGL.zig |  6 ++++--
+ 2 files changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index a5b29070b..a652f5198 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -1707,6 +1707,25 @@ pub const CAPI = struct {
+         surface.refresh();
+     }
+ 
++    /// Notify the surface that its display/GL context is about to be
++    /// destroyed (e.g., GTK GLArea unrealize during reparenting).
++    /// This deinitializes GL resources (FBOs, shaders) while preserving
++    /// the terminal/pty state. The host MUST make the GL context current
++    /// before calling this.
++    export fn ghostty_surface_display_unrealized(surface: *Surface) void {
++        surface.core_surface.renderer.displayUnrealized();
++    }
++
++    /// Notify the surface that a new display/GL context is now available
++    /// (e.g., GTK GLArea re-realize after reparenting). This reinitializes
++    /// GL resources (reloads GLAD, recompiles shaders, recreates FBOs).
++    /// The host MUST make the new GL context current before calling this.
++    export fn ghostty_surface_display_realized(surface: *Surface) void {
++        surface.core_surface.renderer.displayRealized() catch |err| {
++            log.err("error in displayRealized err={}", .{err});
++        };
++    }
++
+     /// Tell the surface that it needs to schedule a render
+     /// call as soon as possible (NOW if possible).
+     export fn ghostty_surface_draw(surface: *Surface) void {
+diff --git a/src/renderer/OpenGL.zig b/src/renderer/OpenGL.zig
+index ef0596c6d..bfb9602fd 100644
+--- a/src/renderer/OpenGL.zig
++++ b/src/renderer/OpenGL.zig
+@@ -239,14 +239,16 @@ pub fn displayRealized(self: *const OpenGL) void {
+     _ = self;
+ 
+     switch (apprt.runtime) {
+-        apprt.gtk => prepareContext(null) catch |err| {
++        apprt.gtk,
++        apprt.embedded,
++        => prepareContext(null) catch |err| {
+             log.warn(
+                 "Error preparing GL context in displayRealized, err={}",
+                 .{err},
+             );
+         },
+ 
+-        else => @compileError("only GTK should be calling displayRealized"),
++        else => @compileError("only GTK/embedded should be calling displayRealized"),
+     }
+ }
+ 
+-- 
+2.53.0
+

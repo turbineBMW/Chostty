@@ -1,0 +1,109 @@
+From 11bf8cf3d34d75e0790627af54ff9e0b69cda48d Mon Sep 17 00:00:00 2001
+From: FreeMeWat <freeme62410@gmail.com>
+Date: Thu, 26 Mar 2026 14:17:58 -0600
+Subject: [PATCH 3/3] embedded: gate paste on text clipboard availability
+
+Add an embedded runtime callback so hosts can avoid claiming paste
+when the clipboard only exposes non-text payloads such as images.
+
+Co-authored-by: Codex <noreply@openai.com>
+---
+ include/ghostty.h                       |  3 +++
+ macos/Sources/Ghostty/Ghostty.App.swift | 14 ++++++++++++++
+ src/apprt/embedded.zig                  | 13 +++++++++++++
+ 3 files changed, 30 insertions(+)
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+index afc20bb3f..0bbd3ffd0 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1001,6 +1001,8 @@ typedef void (*ghostty_runtime_wakeup_cb)(void*);
+ typedef bool (*ghostty_runtime_read_clipboard_cb)(void*,
+                                                   ghostty_clipboard_e,
+                                                   void*);
++typedef bool (*ghostty_runtime_clipboard_has_text_cb)(void*,
++                                                      ghostty_clipboard_e);
+ typedef void (*ghostty_runtime_confirm_read_clipboard_cb)(
+     void*,
+     const char*,
+@@ -1021,6 +1023,7 @@ typedef struct {
+   bool supports_selection_clipboard;
+   ghostty_runtime_wakeup_cb wakeup_cb;
+   ghostty_runtime_action_cb action_cb;
++  ghostty_runtime_clipboard_has_text_cb clipboard_has_text_cb;
+   ghostty_runtime_read_clipboard_cb read_clipboard_cb;
+   ghostty_runtime_confirm_read_clipboard_cb confirm_read_clipboard_cb;
+   ghostty_runtime_write_clipboard_cb write_clipboard_cb;
+diff --git a/macos/Sources/Ghostty/Ghostty.App.swift b/macos/Sources/Ghostty/Ghostty.App.swift
+index 2f0644b93..cdf39b1fd 100644
+--- a/macos/Sources/Ghostty/Ghostty.App.swift
++++ b/macos/Sources/Ghostty/Ghostty.App.swift
+@@ -62,6 +62,7 @@ extension Ghostty {
+                 supports_selection_clipboard: true,
+                 wakeup_cb: { userdata in App.wakeup(userdata) },
+                 action_cb: { app, target, action in App.action(app!, target: target, action: action) },
++                clipboard_has_text_cb: { userdata, loc in App.clipboardHasText(userdata, location: loc) },
+                 read_clipboard_cb: { userdata, loc, state in App.readClipboard(userdata, location: loc, state: state) },
+                 confirm_read_clipboard_cb: { userdata, str, state, request in App.confirmReadClipboard(userdata, string: str, state: state, request: request ) },
+                 write_clipboard_cb: { userdata, loc, content, len, confirm in
+@@ -265,6 +266,10 @@ extension Ghostty {
+ 
+         static func wakeup(_ userdata: UnsafeMutableRawPointer?) {}
+         static func action(_ app: ghostty_app_t, target: ghostty_target_s, action: ghostty_action_s) -> Bool { return false }
++        static func clipboardHasText(
++            _ userdata: UnsafeMutableRawPointer?,
++            location: ghostty_clipboard_e
++        ) -> Bool { false }
+         static func readClipboard(
+             _ userdata: UnsafeMutableRawPointer?,
+             location: ghostty_clipboard_e,
+@@ -323,6 +328,15 @@ extension Ghostty {
+             ])
+         }
+ 
++        static func clipboardHasText(
++            _ userdata: UnsafeMutableRawPointer?,
++            location: ghostty_clipboard_e
++        ) -> Bool {
++            guard let pasteboard = NSPasteboard.ghostty(location) else { return false }
++            let textTypes: [NSPasteboard.PasteboardType] = [.string, .init("public.utf8-plain-text")]
++            return pasteboard.availableType(from: textTypes) != nil
++        }
++
+         static func readClipboard(
+             _ userdata: UnsafeMutableRawPointer?,
+             location: ghostty_clipboard_e,
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index a652f5198..2a6a66485 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -55,6 +55,11 @@ pub const App = struct {
+         /// Callback called to handle an action.
+         action: *const fn (*App, apprt.Target.C, apprt.Action.C) callconv(.c) bool,
+ 
++        /// Return true when the requested clipboard currently exposes text.
++        /// This lets paste keybinds fall through when the clipboard only has
++        /// non-text content such as images.
++        clipboard_has_text: ?*const fn (SurfaceUD, c_int) callconv(.c) bool = null,
++
+         /// Read the clipboard value. Returns true if the clipboard request
+         /// was started and complete_clipboard_request may be called with the
+         /// given state pointer. Returns false if the clipboard request couldn't
+@@ -689,6 +694,14 @@ pub const Surface = struct {
+         clipboard_type: apprt.Clipboard,
+         state: apprt.ClipboardRequest,
+     ) !bool {
++        if (state == .paste) {
++            const has_text = if (self.app.opts.clipboard_has_text) |cb|
++                cb(self.userdata, @intCast(@intFromEnum(clipboard_type)))
++            else
++                true;
++            if (!has_text) return false;
++        }
++
+         // We need to allocate to get a pointer to store our clipboard request
+         // so that it is stable until the read_clipboard callback and call
+         // complete_clipboard_request. This sucks but clipboard requests aren't
+-- 
+2.53.0
+
