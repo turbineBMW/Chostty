@@ -1763,6 +1763,8 @@ fn dispatch_shortcut_command(state: &State, command: ShortcutCommand) -> bool {
             cycle_focused_pane_tab(state, 1);
             true
         }
+        ShortcutCommand::MoveTabLeft => move_active_tab_in_focused_pane(state, -1),
+        ShortcutCommand::MoveTabRight => move_active_tab_in_focused_pane(state, 1),
         ShortcutCommand::SplitDown => {
             split_focused_pane(state, gtk::Orientation::Vertical);
             true
@@ -2322,13 +2324,7 @@ fn build_sidebar_row(
     let row = gtk::ListBoxRow::new();
     row.set_child(Some(&vbox));
 
-    (
-        row,
-        name_label,
-        favorite_button,
-        notify_dot,
-        path_label,
-    )
+    (row, name_label, favorite_button, notify_dot, path_label)
 }
 
 fn build_empty_workspace_page(state: &State) -> gtk::Widget {
@@ -4370,6 +4366,14 @@ fn cycle_focused_pane_tab(state: &State, delta: i32) {
     if let Some((_ws_id, pane_widget)) = find_focused_pane(state) {
         pane::cycle_tab_in_pane(&pane_widget, delta);
     }
+}
+
+fn move_active_tab_in_focused_pane(state: &State, delta: i32) -> bool {
+    if let Some((_ws_id, pane_widget)) = find_focused_pane(state) {
+        return pane::move_active_tab_in_pane(&pane_widget, delta);
+    }
+
+    false
 }
 
 fn close_active_tab_in_focused_pane(state: &State) {

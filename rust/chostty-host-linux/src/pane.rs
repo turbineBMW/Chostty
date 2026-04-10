@@ -577,6 +577,44 @@ pub fn cycle_tab_in_pane(pane_widget: &gtk::Widget, delta: i32) {
     (internals.callbacks.on_state_changed)();
 }
 
+pub fn move_active_tab_in_pane(pane_widget: &gtk::Widget, delta: i32) -> bool {
+    let Some(internals) = find_pane_internals(pane_widget) else {
+        return false;
+    };
+
+    let active_tab_id = {
+        let mut tab_state = internals.tab_state.borrow_mut();
+        let len = tab_state.tabs.len();
+        if len <= 1 {
+            return false;
+        }
+
+        let active_idx = tab_state
+            .active_tab
+            .as_ref()
+            .and_then(|id| tab_state.tabs.iter().position(|entry| entry.id == *id))
+            .unwrap_or(0);
+        let Some(target_idx) = move_tab_target_index(active_idx, len, delta) else {
+            return false;
+        };
+
+        let entry = tab_state.tabs.remove(active_idx);
+        let active_tab_id = entry.id.clone();
+        tab_state.tabs.insert(target_idx, entry);
+        active_tab_id
+    };
+
+    rebuild_tab_strip(&internals.tab_strip, &internals.tab_state);
+    activate_tab(
+        &internals.tab_strip,
+        &internals.content_stack,
+        &internals.tab_state,
+        &active_tab_id,
+    );
+    (internals.callbacks.on_state_changed)();
+    true
+}
+
 pub fn close_active_tab_in_pane(pane_widget: &gtk::Widget) -> bool {
     let Some(internals) = find_pane_internals(pane_widget) else {
         return false;
@@ -676,6 +714,20 @@ pub fn terminal_handle_for_surface(
     }
 
     fallback
+}
+
+fn move_tab_target_index(source_idx: usize, len: usize, delta: i32) -> Option<usize> {
+    if source_idx >= len || len <= 1 {
+        return None;
+    }
+
+    let target_idx = source_idx as i32 + delta;
+    if !(0..len as i32).contains(&target_idx) {
+        return None;
+    }
+
+    let target_idx = target_idx as usize;
+    (target_idx != source_idx).then_some(target_idx)
 }
 
 // ---------------------------------------------------------------------------
@@ -3144,11 +3196,12 @@ fn create_browser_widget(
 mod tests {
     use super::{
         classify_content_drop_zone, content_drop_preview_rect, effective_drop_target_dimensions,
-        is_localhost_input, next_active_after_tab_removal, normalize_browser_entry_input,
-        normalize_reorder_insert_index, pane_action_tooltip, ContentDropZone, TabDragPayload,
-        BROWSER_SEARCH_ENTRY_CSS_CLASS, BROWSER_SEARCH_ENTRY_CSS_CLASSES,
-        BROWSER_URL_ENTRY_CSS_CLASS, BROWSER_URL_ENTRY_CSS_CLASSES, HOST_ENTRY_CSS_CLASS, PANE_CSS,
-        TAB_RENAME_ENTRY_CSS_CLASS, TAB_RENAME_ENTRY_CSS_CLASSES,
+        is_localhost_input, move_tab_target_index, next_active_after_tab_removal,
+        normalize_browser_entry_input, normalize_reorder_insert_index, pane_action_tooltip,
+        ContentDropZone, TabDragPayload, BROWSER_SEARCH_ENTRY_CSS_CLASS,
+        BROWSER_SEARCH_ENTRY_CSS_CLASSES, BROWSER_URL_ENTRY_CSS_CLASS,
+        BROWSER_URL_ENTRY_CSS_CLASSES, HOST_ENTRY_CSS_CLASS, PANE_CSS, TAB_RENAME_ENTRY_CSS_CLASS,
+        TAB_RENAME_ENTRY_CSS_CLASSES,
     };
     use crate::shortcut_config::{default_shortcuts, resolve_shortcuts_from_str, ShortcutId};
 
@@ -3237,6 +3290,15 @@ mod tests {
         assert_eq!(normalize_reorder_insert_index(4, 1), Some(1));
         assert_eq!(normalize_reorder_insert_index(2, 2), None);
         assert_eq!(normalize_reorder_insert_index(2, 3), None);
+    }
+
+    #[test]
+    fn move_tab_target_index_stays_in_bounds_without_wrapping() {
+        assert_eq!(move_tab_target_index(1, 4, -1), Some(0));
+        assert_eq!(move_tab_target_index(1, 4, 1), Some(2));
+        assert_eq!(move_tab_target_index(0, 4, -1), None);
+        assert_eq!(move_tab_target_index(3, 4, 1), None);
+        assert_eq!(move_tab_target_index(0, 1, 1), None);
     }
 
     #[test]
