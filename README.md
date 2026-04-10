@@ -1,10 +1,8 @@
 # Chostty
 
-A GPU-accelerated terminal workspace manager for Linux, powered by Ghostty's rendering engine. A special thanks to the cmux contributors who inspired this build. 
+A GPU-accelerated terminal workspace manager for Linux, powered by Ghostty's rendering engine.
 
-If you are on Mac, please visit https://github.com/manaflow-ai/cmux to download the original. 
-
-https://github.com/user-attachments/assets/6f3047c2-e2b6-49f2-b536-570a1570d0f8
+Chostty is a hard fork of [Limux](https://github.com/am-will/limux).
 
 ## Features
 
@@ -24,7 +22,6 @@ Chostty does not currently publish official GitHub releases. Today the supported
 
 - build and run from source
 - generate local packages with `./scripts/package.sh`
-- use the unofficial AUR package on Arch Linux
 
 ### Build from source
 
@@ -81,13 +78,6 @@ tar xzf ./dist/chostty-<version>-linux-<arch>.tar.gz
 cd chostty-<version>-linux-<arch>
 sudo ./install.sh
 ```
-
-**Arch Linux (unofficial AUR package)** — community-maintained by [antonbarchukov](https://github.com/antonbarchukov):
-```bash
-yay -S chostty-bin
-```
-
-The AUR package is available at [`chostty-bin`](https://aur.archlinux.org/packages/chostty-bin). Thanks to [antonbarchukov](https://github.com/antonbarchukov) for packaging Chostty for Arch users. Arch packaging is not currently maintained by upstream; please report AUR packaging issues to the package maintainer first. See [issue #5](https://github.com/turbineBMW/chostty/issues/5).
 
 To uninstall:
 ```bash
