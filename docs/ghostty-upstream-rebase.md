@@ -40,6 +40,27 @@ Replay these patches from this repo:
 
 ## Suggested Update Flow
 
+The canonical repo workflow is:
+
+```bash
+./scripts/update_ghostty.sh
+```
+
+To target a specific upstream Ghostty commit, branch, or tag:
+
+```bash
+./scripts/update_ghostty.sh --ref <commit-or-tag>
+```
+
+The script fetches upstream Ghostty into the `ghostty` submodule, resets a
+local sync branch, and replays the Chostty patch queue with `git am`.
+By default it inherits `user.name` and `user.email` from the parent Chostty
+repo if the `ghostty` submodule does not have its own Git identity configured.
+
+## Manual Fallback
+
+If you need to replay the queue by hand, the equivalent flow is:
+
 ```bash
 git clone https://github.com/ghostty-org/ghostty.git
 cd ghostty

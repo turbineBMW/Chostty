@@ -97,6 +97,30 @@ LD_LIBRARY_PATH=../ghostty/zig-out/lib:$LD_LIBRARY_PATH ./target/release/chostty
 This builds the binary, bundles `libghostty.so`, icons, and an install script into a tarball.
 `package.sh` also rebuilds `libghostty.so` with `ReleaseFast`, so Zig and the initialized Ghostty submodule must be present.
 
+### Refresh Ghostty From Upstream
+
+To replay Chostty's minimal embedded-Linux Ghostty patch queue onto the latest
+upstream Ghostty `main`:
+
+```bash
+./scripts/update_ghostty.sh
+```
+
+To replay the patch queue onto a specific upstream ref:
+
+```bash
+./scripts/update_ghostty.sh --ref <commit-or-tag>
+```
+
+This script fetches `ghostty-org/ghostty`, resets the local `ghostty`
+submodule checkout to a clean upstream base, and applies the patches from
+`patches/ghostty-upstream-rebase/`.
+It reuses your Chostty repo `git config user.name` and `user.email` for the
+temporary `git am` replay unless you override them with script flags.
+
+See [`docs/ghostty-upstream-rebase.md`](docs/ghostty-upstream-rebase.md) for
+the patch queue and rebase notes.
+
 ## Development
 
 Run the canonical local quality gate before committing:
