@@ -29,6 +29,8 @@ pub enum ShortcutId {
     MoveWorkspaceDown,
     CycleTabPrev,
     CycleTabNext,
+    MoveTabLeft,
+    MoveTabRight,
     SplitDown,
     NewTerminalInFocusedPane,
     SplitRight,
@@ -85,6 +87,8 @@ pub enum ShortcutCommand {
     MoveWorkspaceDown,
     CycleTabPrev,
     CycleTabNext,
+    MoveTabLeft,
+    MoveTabRight,
     SplitDown,
     NewTerminal,
     SplitRight,
@@ -318,7 +322,7 @@ struct ShortcutConfigFile {
     shortcuts: HashMap<String, serde_json::Value>,
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 52] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 54] = [
     ShortcutDefinition {
         id: ShortcutId::NewWorkspace,
         config_key: "new_workspace",
@@ -492,6 +496,28 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 52] = [
         label: "Next Tab",
         registers_gtk_accel: false,
         command: ShortcutCommand::CycleTabNext,
+        scope: ShortcutScope::Window,
+        editable_capture_policy: EditableCapturePolicy::BypassInEditable,
+    },
+    ShortcutDefinition {
+        id: ShortcutId::MoveTabLeft,
+        config_key: "move_tab_left",
+        action_name: "win.move-tab-left",
+        default_accel: "<Ctrl><Alt>Left",
+        label: "Move Tab Left",
+        registers_gtk_accel: false,
+        command: ShortcutCommand::MoveTabLeft,
+        scope: ShortcutScope::Window,
+        editable_capture_policy: EditableCapturePolicy::BypassInEditable,
+    },
+    ShortcutDefinition {
+        id: ShortcutId::MoveTabRight,
+        config_key: "move_tab_right",
+        action_name: "win.move-tab-right",
+        default_accel: "<Ctrl><Alt>Right",
+        label: "Move Tab Right",
+        registers_gtk_accel: false,
+        command: ShortcutCommand::MoveTabRight,
         scope: ShortcutScope::Window,
         editable_capture_policy: EditableCapturePolicy::BypassInEditable,
     },
@@ -1661,7 +1687,7 @@ mod tests {
 
     #[test]
     fn definitions_cover_current_host_shortcuts() {
-        assert_eq!(definitions().len(), 52);
+        assert_eq!(definitions().len(), 54);
     }
 
     #[test]

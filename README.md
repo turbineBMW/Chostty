@@ -47,6 +47,10 @@ cargo build --release
 LD_LIBRARY_PATH=../ghostty/zig-out/lib:$LD_LIBRARY_PATH ./target/release/chostty
 ```
 
+To install directly from the source tree, run `sudo ./scripts/install.sh`. If the
+selected Cargo profile or the Ghostty Zig artifacts are missing, that script
+builds them before installing.
+
 ### Build local packages
 
 ```bash
@@ -196,6 +200,7 @@ You can edit shortcuts from Settings > Keybindings. Remaps are stored in `~/.con
 | Shortcut | Action |
 |---|---|
 | `Ctrl+Shift+Left/Right` | Cycle tabs in focused pane |
+| `Ctrl+Alt+Left/Right` | Move the active tab left/right in the focused pane |
 | `Ctrl+Shift+D` | Split down |
 | `Ctrl+Shift+T` | New terminal in focused pane |
 | `Ctrl+D` | Split right |

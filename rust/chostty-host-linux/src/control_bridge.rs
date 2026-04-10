@@ -5,10 +5,10 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use gtk::glib;
-use gtk4 as gtk;
 use chostty_control::socket_path::{resolve_socket_path, SocketMode};
 use chostty_protocol::{parse_v1_command_envelope, V2Request, V2Response};
+use gtk::glib;
+use gtk4 as gtk;
 use serde_json::{json, Map, Value};
 
 const METHODS: &[&str] = &[
