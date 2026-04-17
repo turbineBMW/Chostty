@@ -1640,7 +1640,14 @@ fn show_terminal_context_menu(
                 pop.popdown();
                 match label.as_str() {
                     "Copy" => surface_action(surface, "copy_to_clipboard"),
-                    "Paste" => surface_action(surface, "paste_from_clipboard"),
+                    "Paste" => {
+                        tracing::info!(
+                            event = "paste",
+                            source = "context_menu",
+                            "paste requested via context menu"
+                        );
+                        surface_action(surface, "paste_from_clipboard")
+                    }
                     "Browser" => {
                         let callbacks = cb.borrow();
                         (callbacks.on_open_browser_here)();

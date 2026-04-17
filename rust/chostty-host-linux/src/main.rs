@@ -174,6 +174,8 @@ fn main() {
         window::build_window(app);
     });
     app.run();
+
+    tracing::info!(event = "shutdown", "chostty exiting cleanly");
 }
 
 #[cfg(test)]

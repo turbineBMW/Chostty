@@ -4293,7 +4293,14 @@ fn dispatch_terminal_command(state: &State, command: ShortcutCommand) -> bool {
         ShortcutCommand::SurfaceUseSelectionForFind => target.use_selection_for_find(),
         ShortcutCommand::TerminalClearScrollback => target.perform_binding_action("clear_screen"),
         ShortcutCommand::TerminalCopy => target.perform_binding_action("copy_to_clipboard"),
-        ShortcutCommand::TerminalPaste => target.perform_binding_action("paste_from_clipboard"),
+        ShortcutCommand::TerminalPaste => {
+            tracing::info!(
+                event = "paste",
+                source = "shortcut",
+                "paste requested via shortcut"
+            );
+            target.perform_binding_action("paste_from_clipboard")
+        }
         ShortcutCommand::TerminalIncreaseFontSize => {
             target.perform_binding_action("increase_font_size:1")
         }
