@@ -208,6 +208,40 @@ You can edit shortcuts from Settings > Keybindings. Remaps are stored in `~/.con
 | `Ctrl+T` | New terminal tab |
 | `Ctrl+Arrow` | Focus pane in direction |
 
+## Logs
+
+Chostty writes two log files under `$XDG_STATE_HOME/chostty/` (typically
+`~/.local/state/chostty/`):
+
+- `chostty.<YYYY-MM-DD>.log` — structured events (startup, paste, workspace /
+  pane / tab operations, terminal spawn, browser navigate, Rust panics with
+  backtrace). Rotated daily; 7 files retained.
+- `chostty.stderr.log` — raw stderr captured from GTK, GLib, WebKit, and
+  libghostty. **Truncated on each launch**, so this file always corresponds
+  to the current process.
+
+### Adjusting verbosity
+
+Set `RUST_LOG` before launching. Examples:
+
+```bash
+RUST_LOG=chostty=debug chostty         # include DEBUG events
+RUST_LOG=warn chostty                  # WARN and above only
+```
+
+### For crash diagnosis
+
+If Chostty crashes, capture both files plus the core dump:
+
+```bash
+cp ~/.local/state/chostty/chostty.$(date +%F).log /tmp/
+cp ~/.local/state/chostty/chostty.stderr.log /tmp/
+coredumpctl info chostty | head -n 100 > /tmp/coredump-info.txt
+```
+
+`chostty.stderr.log` will contain any GLib critical warnings that typically
+precede these crashes; `coredumpctl` has the real stack trace with symbols.
+
 ## Architecture
 
 ```
