@@ -804,7 +804,8 @@ async fn run_rename_workspace_like(
     command: &str,
     args: &[String],
 ) -> Result<Value> {
-    let workspace = parse_opt(args, "--workspace").or_else(|| env::var("CHOSTTY_WORKSPACE_ID").ok());
+    let workspace =
+        parse_opt(args, "--workspace").or_else(|| env::var("CHOSTTY_WORKSPACE_ID").ok());
     let title = trailing_title(args).ok_or_else(|| {
         if command == "rename-window" {
             anyhow!("rename-window requires a title")
@@ -853,7 +854,8 @@ async fn run_tab_action(client: &mut Client, args: &[String]) -> Result<Value> {
 
     let action = parse_opt(args, "--action")
         .ok_or_else(|| anyhow!("tab-action requires --action <name>"))?;
-    let workspace = parse_opt(args, "--workspace").or_else(|| env::var("CHOSTTY_WORKSPACE_ID").ok());
+    let workspace =
+        parse_opt(args, "--workspace").or_else(|| env::var("CHOSTTY_WORKSPACE_ID").ok());
     let tab = parse_opt(args, "--tab").or_else(|| env::var("CHOSTTY_TAB_ID").ok());
     let title = parse_opt(args, "--title").or_else(|| trailing_title(args));
     let url = parse_opt(args, "--url");
