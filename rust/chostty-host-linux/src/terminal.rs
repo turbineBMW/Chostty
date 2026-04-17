@@ -5,7 +5,7 @@ use shell_quote::Bash;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::os::unix::ffi::OsStringExt;
 use std::ptr;
@@ -31,6 +31,7 @@ unsafe impl Sync for GhosttyState {}
 static GHOSTTY: OnceLock<GhosttyState> = OnceLock::new();
 static CURRENT_COLOR_SCHEME: AtomicI32 = AtomicI32::new(GHOSTTY_COLOR_SCHEME_LIGHT);
 static WAKEUP_IDLE_QUEUED: AtomicBool = AtomicBool::new(false);
+static NEXT_CLIPBOARD_REQUEST_ID: AtomicI32 = AtomicI32::new(1);
 
 type TitleChangedCallback = dyn Fn(&str);
 type PwdChangedCallback = dyn Fn(&str);
@@ -52,6 +53,24 @@ struct SurfaceEntry {
 
 struct ClipboardContext {
     surface: Cell<ghostty_surface_t>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingClipboardPhase {
+    Reading,
+    Confirming,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingClipboardRequest {
+    id: i32,
+    surface_key: usize,
+    phase: PendingClipboardPhase,
+}
+
+thread_local! {
+    static PENDING_CLIPBOARD_REQUESTS: RefCell<HashMap<usize, PendingClipboardRequest>> =
+        RefCell::new(HashMap::new());
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -589,23 +608,118 @@ unsafe fn clipboard_surface_from_userdata(userdata: *mut c_void) -> Option<ghost
     }
 }
 
+fn track_clipboard_request(surface: ghostty_surface_t, state: *mut c_void) -> i32 {
+    let request_id = NEXT_CLIPBOARD_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    PENDING_CLIPBOARD_REQUESTS.with(|requests| {
+        requests.borrow_mut().insert(
+            state as usize,
+            PendingClipboardRequest {
+                id: request_id,
+                surface_key: surface as usize,
+                phase: PendingClipboardPhase::Reading,
+            },
+        );
+    });
+    request_id
+}
+
+fn clipboard_request_is_current(state: *mut c_void, request_id: i32) -> bool {
+    PENDING_CLIPBOARD_REQUESTS.with(|requests| {
+        requests
+            .borrow()
+            .get(&(state as usize))
+            .is_some_and(|request| request.id == request_id)
+    })
+}
+
+fn mark_clipboard_request_confirming(state: *mut c_void) -> Option<PendingClipboardRequest> {
+    PENDING_CLIPBOARD_REQUESTS.with(|requests| {
+        let mut requests = requests.borrow_mut();
+        let request = requests.get_mut(&(state as usize))?;
+        request.phase = PendingClipboardPhase::Confirming;
+        Some(*request)
+    })
+}
+
+fn clipboard_request_is_confirming(state: *mut c_void, request_id: i32) -> bool {
+    PENDING_CLIPBOARD_REQUESTS.with(|requests| {
+        requests
+            .borrow()
+            .get(&(state as usize))
+            .is_some_and(|request| {
+                request.id == request_id && request.phase == PendingClipboardPhase::Confirming
+            })
+    })
+}
+
+fn finish_clipboard_request_if_current(state: *mut c_void, request_id: i32) {
+    PENDING_CLIPBOARD_REQUESTS.with(|requests| {
+        let mut requests = requests.borrow_mut();
+        if requests
+            .get(&(state as usize))
+            .is_some_and(|request| request.id == request_id)
+        {
+            requests.remove(&(state as usize));
+        }
+    });
+}
+
+fn finish_clipboard_request(state: *mut c_void) {
+    PENDING_CLIPBOARD_REQUESTS.with(|requests| {
+        requests.borrow_mut().remove(&(state as usize));
+    });
+}
+
+fn take_clipboard_requests_for_surface(surface: ghostty_surface_t) -> Vec<*mut c_void> {
+    let surface_key = surface as usize;
+    PENDING_CLIPBOARD_REQUESTS.with(|requests| {
+        let mut requests = requests.borrow_mut();
+        let states = requests
+            .iter()
+            .filter_map(|(state, request)| {
+                (request.surface_key == surface_key).then_some(*state as *mut c_void)
+            })
+            .collect::<Vec<_>>();
+        for state in &states {
+            requests.remove(&(*state as usize));
+        }
+        states
+    })
+}
+
+unsafe fn cancel_clipboard_request(surface: ghostty_surface_t, state: *mut c_void) {
+    unsafe {
+        ghostty_surface_cancel_clipboard_request(surface, state);
+    }
+    finish_clipboard_request(state);
+}
+
 unsafe extern "C" fn ghostty_read_clipboard_cb(
     userdata: *mut c_void,
     clipboard_type: c_int,
     state: *mut c_void,
-) {
+) -> bool {
     let surface_ptr = match unsafe { clipboard_surface_from_userdata(userdata) } {
         Some(surface) => surface,
-        None => return,
+        None => return false,
     };
 
     let display = match gtk::gdk::Display::default() {
         Some(d) => d,
-        None => return,
+        None => return false,
     };
     let clipboard = clipboard_from_type(&display, clipboard_type);
+    let request_id = track_clipboard_request(surface_ptr, state);
 
     clipboard.read_text_async(gtk::gio::Cancellable::NONE, move |result| {
+        if !clipboard_request_is_current(state, request_id) {
+            eprintln!(
+                "chostty: skipping stale clipboard completion state={:p} request_id={request_id}",
+                state
+            );
+            return;
+        }
+
         // Get clipboard text, defaulting to empty string on failure
         let text = result
             .ok()
@@ -616,10 +730,21 @@ unsafe extern "C" fn ghostty_read_clipboard_cb(
         let clean = text.replace('\0', "");
         if let Ok(cstr) = CString::new(clean) {
             unsafe {
-                ghostty_surface_complete_clipboard_request(surface_ptr, cstr.as_ptr(), state, true);
+                ghostty_surface_complete_clipboard_request(
+                    surface_ptr,
+                    cstr.as_ptr(),
+                    state,
+                    false,
+                );
             }
         }
+
+        if !clipboard_request_is_confirming(state, request_id) {
+            finish_clipboard_request_if_current(state, request_id);
+        }
     });
+
+    true
 }
 
 fn clipboard_from_type(display: &gtk::gdk::Display, clipboard_type: c_int) -> gtk::gdk::Clipboard {
@@ -678,15 +803,62 @@ unsafe extern "C" fn ghostty_confirm_read_clipboard_cb(
     userdata: *mut c_void,
     text: *const c_char,
     state: *mut c_void,
-    _request_type: c_int,
+    request_type: c_int,
 ) {
     let surface_ptr = match unsafe { clipboard_surface_from_userdata(userdata) } {
         Some(surface) => surface,
         None => return,
     };
-    unsafe {
-        ghostty_surface_complete_clipboard_request(surface_ptr, text, state, true);
+
+    let Some(request) = mark_clipboard_request_confirming(state) else {
+        eprintln!(
+            "chostty: skipping unexpected clipboard confirmation state={:p}",
+            state
+        );
+        return;
+    };
+
+    if request_type != GHOSTTY_CLIPBOARD_REQUEST_PASTE {
+        eprintln!(
+            "chostty: denying embedded clipboard read request type={request_type} state={:p}",
+            state
+        );
+        unsafe {
+            cancel_clipboard_request(surface_ptr, state);
+        }
+        return;
     }
+
+    let text = if text.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let surface_key = surface_ptr as usize;
+    let state_key = state as usize;
+    let request_id = request.id;
+
+    glib::idle_add_local_once(move || {
+        let state = state_key as *mut c_void;
+        if !clipboard_request_is_current(state, request_id) {
+            return;
+        }
+
+        let surface_ptr = surface_key as ghostty_surface_t;
+        if !SURFACE_MAP.with(|map| map.borrow().contains_key(&surface_key)) {
+            finish_clipboard_request_if_current(state, request_id);
+            return;
+        }
+
+        if let Ok(cstr) = CString::new(text) {
+            unsafe {
+                ghostty_surface_complete_clipboard_request(surface_ptr, cstr.as_ptr(), state, true);
+            }
+        }
+        finish_clipboard_request_if_current(state, request_id);
+    });
 }
 
 unsafe extern "C" fn ghostty_write_clipboard_cb(
@@ -1361,6 +1533,11 @@ pub fn create_terminal(
         overlay.connect_destroy(move |_| {
             im_context.set_client_widget(gtk::Widget::NONE);
             if let Some(surface) = surface_cell.borrow_mut().take() {
+                for state in take_clipboard_requests_for_surface(surface) {
+                    unsafe {
+                        ghostty_surface_cancel_clipboard_request(surface, state);
+                    }
+                }
                 let surface_key = surface as usize;
                 SURFACE_MAP.with(|map| {
                     if let Some(entry) = map.borrow_mut().remove(&surface_key) {

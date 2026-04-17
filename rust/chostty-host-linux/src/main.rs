@@ -30,6 +30,16 @@ fn append_env(key: &str, value: &str) {
     }
 }
 
+fn set_gdk_render_env() {
+    append_env("GDK_DISABLE", "gles-api,vulkan");
+
+    // GTK 4.16 moved these switches from GDK_DEBUG to GDK_DISABLE. Setting
+    // the old names on newer GTK emits startup warnings.
+    if gtk4::major_version() == 4 && gtk4::minor_version() < 16 {
+        append_env("GDK_DEBUG", "gl-disable-gles,vulkan-disable");
+    }
+}
+
 fn has_ghostty_terminfo(path: &Path) -> bool {
     let Some(parent) = path.parent() else {
         return false;
@@ -132,8 +142,7 @@ fn main() {
     // Ghostty requires desktop OpenGL, not GLES. Must disable GLES before
     // GTK initializes, otherwise GDK may select a GLES context.
     // This matches what Ghostty's own GTK apprt does in setGtkEnv().
-    append_env("GDK_DISABLE", "gles-api,vulkan");
-    append_env("GDK_DEBUG", "gl-disable-gles,vulkan-disable");
+    set_gdk_render_env();
 
     // Embedded Ghostty needs a resources directory to resolve named themes,
     // terminfo, and shell integration. Prefer Chostty-bundled resources but

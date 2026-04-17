@@ -130,7 +130,10 @@ mod tests {
         );
 
         let resolved = resolve_socket_path(None, SocketMode::Runtime);
-        assert_eq!(resolved, PathBuf::from("/tmp/from-chostty-socket-path.sock"));
+        assert_eq!(
+            resolved,
+            PathBuf::from("/tmp/from-chostty-socket-path.sock")
+        );
     }
 
     #[test]

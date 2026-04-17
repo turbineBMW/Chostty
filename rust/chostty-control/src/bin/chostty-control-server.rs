@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use clap::{Parser, ValueEnum};
 use chostty_control::socket_path::{resolve_socket_path, SocketMode};
+use clap::{Parser, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(

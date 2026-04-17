@@ -6612,7 +6612,10 @@ mod tests {
                 json!({ "surface_id": surface_id.clone() }),
             ))
             .await;
-        assert_eq!(title.result.expect("title")["title"], "chostty file url load");
+        assert_eq!(
+            title.result.expect("title")["title"],
+            "chostty file url load"
+        );
 
         let eval = dispatcher
             .dispatch(request(

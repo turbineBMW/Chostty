@@ -331,7 +331,8 @@ pub type ghostty_runtime_wakeup_cb = unsafe extern "C" fn(*mut c_void);
 pub type ghostty_runtime_action_cb =
     unsafe extern "C" fn(ghostty_app_t, ghostty_target_s, ghostty_action_s) -> bool;
 pub type ghostty_runtime_clipboard_has_text_cb = unsafe extern "C" fn(*mut c_void, c_int) -> bool;
-pub type ghostty_runtime_read_clipboard_cb = unsafe extern "C" fn(*mut c_void, c_int, *mut c_void);
+pub type ghostty_runtime_read_clipboard_cb =
+    unsafe extern "C" fn(*mut c_void, c_int, *mut c_void) -> bool;
 pub type ghostty_runtime_confirm_read_clipboard_cb =
     unsafe extern "C" fn(*mut c_void, *const c_char, *mut c_void, c_int);
 pub type ghostty_runtime_write_clipboard_cb =
@@ -448,4 +449,5 @@ extern "C" {
         state: *mut c_void,
         confirmed: bool,
     );
+    pub fn ghostty_surface_cancel_clipboard_request(surface: ghostty_surface_t, state: *mut c_void);
 }
