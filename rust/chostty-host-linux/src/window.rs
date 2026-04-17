@@ -3734,11 +3734,18 @@ fn close_workspace_by_id_internal(
 
     let row = s.workspaces[new_idx].sidebar_row.clone();
     let sidebar_list = s.sidebar_list.clone();
+    let focus_root = s.workspaces[new_idx].root.clone();
     drop(s);
 
     sync_workspace_stack_visibility(state);
     apply_sidebar_filter(state);
     sidebar_list.select_row(Some(&row));
+    // select_row above re-enters switch_workspace, but it short-circuits
+    // because active_idx already matches new_idx. Focus the new workspace's
+    // active pane explicitly, matching switch_workspace's idle-tick pattern.
+    glib::idle_add_local_once(move || {
+        focus_workspace_entrypoint(&focus_root);
+    });
     if persist {
         request_session_save(state);
     }
