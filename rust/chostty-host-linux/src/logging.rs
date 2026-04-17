@@ -18,9 +18,8 @@ pub fn init() {
     let dir = log_dir();
 
     if let Err(err) = fs::create_dir_all(&dir) {
-        // Write directly to the real stderr — `init_tracing` below may
-        // still succeed if the directory was created by another racing
-        // process, but we log the failure regardless.
+        // Write directly to the real stderr — we're about to bail out of the
+        // file-logging path entirely and fall back to a stderr-only subscriber.
         eprintln!(
             "chostty: failed to create log directory {}: {err}",
             dir.display()

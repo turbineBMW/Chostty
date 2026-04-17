@@ -2948,11 +2948,20 @@ const CHOSTTY_BROWSER_EDITABLE_STATE_SCRIPT: &str = r#"
 "#;
 
 /// Extract host (and port) from a URI for privacy-safe logging.
-/// Never logs path, query, or fragment — only the host[:port] portion.
+/// Never logs path, query, fragment, or userinfo — only the host[:port] portion.
 fn log_host_only(uri: &str) -> String {
     let after_scheme = uri.splitn(2, "://").nth(1).unwrap_or(uri);
-    let host_and_port = after_scheme.splitn(2, '/').next().unwrap_or(after_scheme);
-    host_and_port.splitn(2, '?').next().unwrap_or(host_and_port).to_string()
+    let without_path = after_scheme.splitn(2, '/').next().unwrap_or(after_scheme);
+    let without_query = without_path.splitn(2, '?').next().unwrap_or(without_path);
+    let without_fragment = without_query.splitn(2, '#').next().unwrap_or(without_query);
+    // Strip userinfo (e.g. `user:pass@host` → `host`) by taking the part AFTER the last `@`.
+    // Using rsplitn in case the host itself contains `@` in weird URIs — we always want
+    // the rightmost segment.
+    without_fragment
+        .rsplitn(2, '@')
+        .next()
+        .unwrap_or(without_fragment)
+        .to_string()
 }
 
 #[cfg(feature = "webkit")]
@@ -3469,5 +3478,58 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(normalize_browser_entry_input(input), expected, "{input}");
         }
+    }
+
+    // --- log_host_only privacy tests ---
+
+    use super::log_host_only;
+
+    #[test]
+    fn log_host_only_strips_scheme_and_path() {
+        assert_eq!(log_host_only("https://example.com/foo/bar"), "example.com");
+    }
+
+    #[test]
+    fn log_host_only_strips_query_string() {
+        assert_eq!(
+            log_host_only("https://example.com/path?token=secret"),
+            "example.com"
+        );
+    }
+
+    #[test]
+    fn log_host_only_strips_fragment() {
+        assert_eq!(log_host_only("https://example.com#frag"), "example.com");
+    }
+
+    #[test]
+    fn log_host_only_strips_userinfo_with_password() {
+        assert_eq!(
+            log_host_only("https://user:pass@example.com/"),
+            "example.com"
+        );
+    }
+
+    #[test]
+    fn log_host_only_strips_userinfo_without_password() {
+        assert_eq!(log_host_only("https://user@example.com/"), "example.com");
+    }
+
+    #[test]
+    fn log_host_only_preserves_port() {
+        assert_eq!(
+            log_host_only("https://example.com:8443/"),
+            "example.com:8443"
+        );
+    }
+
+    #[test]
+    fn log_host_only_handles_no_path_no_query() {
+        assert_eq!(log_host_only("https://example.com"), "example.com");
+    }
+
+    #[test]
+    fn log_host_only_handles_missing_scheme() {
+        assert_eq!(log_host_only("example.com/foo"), "example.com");
     }
 }
