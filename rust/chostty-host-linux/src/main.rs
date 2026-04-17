@@ -1,5 +1,6 @@
 mod app_config;
 mod control_bridge;
+mod logging;
 mod keybind_editor;
 mod layout_state;
 mod notification_sound;
