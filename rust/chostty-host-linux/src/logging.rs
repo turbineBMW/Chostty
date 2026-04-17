@@ -124,6 +124,36 @@ fn init_tracing_stderr_fallback() {
         .try_init();
 }
 
+/// Install a panic hook that logs the panic via `tracing::error!` (so it
+/// lands in `chostty.log`) and then delegates to the previously installed
+/// hook — whose default behavior prints the panic to stderr, which after
+/// Task 5's redirect means it lands in `chostty.stderr.log` too.
+fn install_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info.payload();
+        let message = payload
+            .downcast_ref::<&'static str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("<non-string panic payload>");
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let backtrace = std::backtrace::Backtrace::force_capture();
+
+        tracing::error!(
+            panic.message = %message,
+            panic.location = %location,
+            panic.backtrace = %backtrace,
+            "rust panic"
+        );
+
+        prev(info);
+    }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
