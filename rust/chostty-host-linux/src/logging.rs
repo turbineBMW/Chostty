@@ -7,6 +7,8 @@ use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing_appender::rolling::{Builder, Rotation};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Resolve the directory that holds chostty's log files.
 ///
@@ -67,6 +69,59 @@ fn redirect_stderr(dir: &Path) -> io::Result<()> {
 
     std::mem::forget(file);
     Ok(())
+}
+
+/// Install the global `tracing` subscriber with a daily-rotating file
+/// appender at `dir/chostty.log.*`. Uses the appender as a **blocking
+/// writer** (no background worker, no non-blocking buffer) so that every
+/// event is on disk before the call returns — critical when the next line
+/// of C code might segfault.
+///
+/// Respects `RUST_LOG`; defaults to `info` when unset.
+///
+/// Returns an error only if the rolling appender fails to build
+/// (e.g. directory not writable); in that case the caller should fall back
+/// to an stderr-only subscriber.
+fn init_tracing(dir: &Path) -> io::Result<()> {
+    let appender = Builder::new()
+        .rotation(Rotation::DAILY)
+        .max_log_files(7)
+        .filename_prefix("chostty")
+        .filename_suffix("log")
+        .build(dir)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    // ANSI off: the file should contain plain text, not escape codes.
+    let layer = fmt::layer()
+        .with_writer(appender)
+        .with_ansi(false)
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_line_number(true);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(layer)
+        .try_init()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+
+    Ok(())
+}
+
+/// Fallback when the rolling appender can't be built: install a plain
+/// stderr subscriber so `tracing!` calls are at least visible if the app
+/// is launched from a terminal.
+fn init_tracing_stderr_fallback() {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let layer = fmt::layer().with_ansi(false);
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(layer)
+        .try_init();
 }
 
 #[cfg(test)]
