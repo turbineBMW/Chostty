@@ -2,13 +2,64 @@
 //!
 //! See docs/superpowers/specs/2026-04-17-persistent-logging-design.md.
 
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_appender::rolling::{Builder, Rotation};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+/// One-shot initializer for chostty's logging. Call once, first thing in
+/// `main()`. Fail-soft: every step is independent, and any failure falls
+/// back to the most-useful remaining behavior (stderr subscriber, or
+/// nothing) rather than aborting the program.
+pub fn init() {
+    let dir = log_dir();
+
+    if let Err(err) = fs::create_dir_all(&dir) {
+        // Write directly to the real stderr — `init_tracing` below may
+        // still succeed if the directory was created by another racing
+        // process, but we log the failure regardless.
+        eprintln!(
+            "chostty: failed to create log directory {}: {err}",
+            dir.display()
+        );
+        init_tracing_stderr_fallback();
+        install_panic_hook();
+        return;
+    }
+
+    // Redirect first, so any output from init_tracing (unlikely) or any
+    // C-level library called afterwards lands in the stderr file.
+    if let Err(err) = redirect_stderr(&dir) {
+        eprintln!(
+            "chostty: failed to redirect stderr to {}: {err}",
+            dir.join("chostty.stderr.log").display()
+        );
+        // Keep going — tracing-to-file still useful even without stderr capture.
+    }
+
+    if let Err(err) = init_tracing(&dir) {
+        // Avoid `tracing!` calls here — the subscriber isn't installed.
+        // Write to (redirected) stderr so the message lands in the stderr file.
+        eprintln!(
+            "chostty: failed to install rolling tracing appender in {}: {err}",
+            dir.display()
+        );
+        init_tracing_stderr_fallback();
+    }
+
+    install_panic_hook();
+
+    tracing::info!(
+        event = "startup",
+        version = crate::VERSION,
+        pid = std::process::id(),
+        log_dir = %dir.display(),
+        "chostty started"
+    );
+}
 
 /// Resolve the directory that holds chostty's log files.
 ///

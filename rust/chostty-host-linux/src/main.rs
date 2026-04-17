@@ -134,11 +134,17 @@ fn set_ghostty_runtime_env() {
 }
 
 fn main() {
-    // Handle --version flag
+    // Handle --version flag (before logging init so `--version` stays a
+    // side-effect-free, instant command).
     if std::env::args().any(|a| a == "--version" || a == "-v") {
         println!("Chostty {VERSION}");
         return;
     }
+
+    // Install persistent file logging before anything else. Captures
+    // Rust panics, redirects C-level stderr into a file, and starts
+    // structured event logging.
+    logging::init();
 
     // Ghostty requires desktop OpenGL, not GLES. Must disable GLES before
     // GTK initializes, otherwise GDK may select a GLES context.
