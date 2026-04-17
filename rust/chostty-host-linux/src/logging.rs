@@ -2,7 +2,11 @@
 //!
 //! See docs/superpowers/specs/2026-04-17-persistent-logging-design.md.
 
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Resolve the directory that holds chostty's log files.
 ///
@@ -25,6 +29,44 @@ fn log_dir() -> PathBuf {
         return home.join(".local").join("state").join("chostty");
     }
     PathBuf::from("/tmp/chostty")
+}
+
+/// Truncate-open `chostty.stderr.log` in `dir`, write a session banner, and
+/// `dup2` the file's fd onto fd 2 so that any C-level stderr output (GTK,
+/// GLib, libghostty) lands in the file for the lifetime of this process.
+///
+/// The `File` is deliberately leaked after `dup2` — closing it would not
+/// affect fd 2 (dup2 gave it an independent slot in the kernel fd table),
+/// but leaking makes the ownership intent explicit and avoids ever running
+/// any `Drop` on it.
+fn redirect_stderr(dir: &Path) -> io::Result<()> {
+    let path = dir.join("chostty.stderr.log");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)?;
+
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    let banner = format!(
+        "=== chostty v{} pid={} started epoch={} ===\n",
+        crate::VERSION,
+        std::process::id(),
+        secs,
+    );
+    file.write_all(banner.as_bytes())?;
+    file.flush()?;
+
+    let rc = unsafe { libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO) };
+    if rc < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    std::mem::forget(file);
+    Ok(())
 }
 
 #[cfg(test)]
