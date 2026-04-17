@@ -1119,6 +1119,11 @@ pub fn create_terminal(
                 eprintln!("chostty: failed to create ghostty surface");
                 return;
             }
+            tracing::info!(
+                event = "terminal_spawn",
+                cwd = wd.as_deref().unwrap_or(""),
+                "terminal spawned"
+            );
             unsafe {
                 (*clipboard_context).surface.set(surface);
                 ghostty_surface_set_color_scheme(surface, current_ghostty_color_scheme());

@@ -2589,8 +2589,10 @@ fn commit_workspace_rename(state: &State, workspace_id: &str, next_name: &str) -
         if workspace.name == next_name {
             return false;
         }
+        let old_name = workspace.name.clone();
         workspace.name = next_name.to_string();
         workspace.name_label.set_label(next_name);
+        tracing::info!(event = "workspace_rename", old = %old_name, new = %next_name, "workspace renamed");
         true
     };
 
@@ -2684,6 +2686,7 @@ fn reorder_workspace_by_id(
             return false;
         }
 
+        tracing::info!(event = "workspace_reorder", from = source_idx, to = target_idx, "workspace reordered");
         let active_workspace_id = s.active_workspace().map(|workspace| workspace.id.clone());
         let moving_workspace = s.workspaces.remove(source_idx);
         let Some(target_idx_after_removal) = s
@@ -3518,6 +3521,8 @@ fn add_workspace_from_state(state: &State, workspace: &WorkspaceState) {
         s.active_idx = s.workspaces.len() - 1;
     }
 
+    tracing::info!(event = "workspace_create", name = %workspace.name, "workspace created");
+
     sync_workspace_stack_visibility(state);
     apply_sidebar_filter(state);
     sidebar_list.select_row(Some(&row));
@@ -3700,6 +3705,7 @@ fn close_workspace_by_id_internal(
         .or_else(|| s.active_workspace().map(|workspace| workspace.id.clone()));
 
     let ws = s.workspaces.remove(idx);
+    tracing::info!(event = "workspace_close", name = %ws.name, "workspace closed");
     s.stack.remove(&ws.root);
     s.sidebar_list.remove(&ws.sidebar_row);
 
@@ -3744,6 +3750,7 @@ fn switch_workspace(state: &State, idx: usize) {
         if idx >= s.workspaces.len() || idx == s.active_idx {
             return;
         }
+        tracing::info!(event = "workspace_switch", index = idx, "workspace switched");
         s.active_idx = idx;
         let stack = s.stack.clone();
         let stack_name = format!("ws-{}", s.workspaces[idx].id);
@@ -4063,6 +4070,13 @@ fn split_pane(
         options.skip_default_tab,
     );
 
+    let direction = match orientation {
+        gtk::Orientation::Horizontal => "right",
+        gtk::Orientation::Vertical => "down",
+        _ => "unknown",
+    };
+    tracing::info!(event = "pane_split", direction, "pane split");
+
     // Mutate the data model and trigger async widget tree rebuild.
     // The existing pane's GLArea will be unrealized then re-realized
     // on separate ticks, avoiding the GTK4 GLArea breakage.
@@ -4095,6 +4109,8 @@ fn remove_pane_internal(state: &State, ws_id: &str, pane_widget: &gtk::Widget, p
         close_workspace_by_id(state, ws_id);
         return;
     }
+
+    tracing::info!(event = "pane_close", "pane closed");
 
     // Mutate the data model and trigger async widget tree rebuild
     container.remove(pane_widget);

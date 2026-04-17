@@ -598,6 +598,7 @@ pub fn move_active_tab_in_pane(pane_widget: &gtk::Widget, delta: i32) -> bool {
             return false;
         };
 
+        tracing::info!(event = "tab_reorder", from = active_idx, to = target_idx, "tab reordered");
         let entry = tab_state.tabs.remove(active_idx);
         let active_tab_id = entry.id.clone();
         tab_state.tabs.insert(target_idx, entry);
@@ -1225,6 +1226,8 @@ fn add_terminal_tab_inner(
         }
     }
 
+    tracing::info!(event = "tab_new", kind = "terminal", "tab created");
+
     activate_tab(
         &internals.tab_strip,
         &internals.content_stack,
@@ -1302,6 +1305,8 @@ fn add_browser_tab_inner(internals: &Rc<PaneInternals>, options: Option<BrowserT
             apply_pin_visuals(&entry.tab_button, true);
         }
     }
+
+    tracing::info!(event = "tab_new", kind = "browser", "tab created");
 
     activate_tab(
         &internals.tab_strip,
@@ -2488,6 +2493,7 @@ fn activate_tab(
     if ts.active_tab.as_deref() == Some(tab_id) {
         return;
     }
+    tracing::info!(event = "tab_switch", "tab switched");
     ts.active_tab = Some(tab_id.to_string());
 
     // Update visual state on all tabs
@@ -2604,6 +2610,7 @@ fn remove_tab(
         };
         (entry, is_empty, new_id, was_active)
     };
+    tracing::info!(event = "tab_close", "tab closed");
     // Remove widgets after dropping the borrow — unparenting fires GTK
     // signals (state-flags-changed) whose callbacks borrow `tab_state`.
     tab_strip.remove(&entry.tab_button);
@@ -2940,6 +2947,14 @@ const CHOSTTY_BROWSER_EDITABLE_STATE_SCRIPT: &str = r#"
 })();
 "#;
 
+/// Extract host (and port) from a URI for privacy-safe logging.
+/// Never logs path, query, or fragment — only the host[:port] portion.
+fn log_host_only(uri: &str) -> String {
+    let after_scheme = uri.splitn(2, "://").nth(1).unwrap_or(uri);
+    let host_and_port = after_scheme.splitn(2, '/').next().unwrap_or(after_scheme);
+    host_and_port.splitn(2, '?').next().unwrap_or(host_and_port).to_string()
+}
+
 #[cfg(feature = "webkit")]
 fn create_browser_widget(
     initial_uri: Option<&str>,
@@ -3046,6 +3061,10 @@ fn create_browser_widget(
                     return;
                 }
                 restoring_flag.set(false);
+                let host = log_host_only(&uri_str);
+                if !host.is_empty() && uri_str != "about:blank" {
+                    tracing::info!(event = "browser_navigate", host = %host, "browser navigate");
+                }
                 *saved_uri.borrow_mut() = Some(uri_str);
                 (callbacks.on_state_changed)();
             }
