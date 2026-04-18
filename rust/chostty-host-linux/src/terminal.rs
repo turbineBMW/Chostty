@@ -29,16 +29,17 @@ use chostty_ghostty_sys::*;
 mod terminal_area {
     use std::cell::{Cell, RefCell};
 
+    use gtk4 as gtk;
+
     use gtk::glib;
     use gtk::prelude::*;
     use gtk::subclass::prelude::*;
-    use gtk4 as gtk;
 
     pub struct ChosttyTerminalAreaPriv {
-        pub hadjustment: RefCell<Option<gtk::Adjustment>>,
-        pub vadjustment: RefCell<Option<gtk::Adjustment>>,
-        pub hscroll_policy: Cell<gtk::ScrollablePolicy>,
-        pub vscroll_policy: Cell<gtk::ScrollablePolicy>,
+        hadjustment: RefCell<Option<gtk::Adjustment>>,
+        vadjustment: RefCell<Option<gtk::Adjustment>>,
+        hscroll_policy: Cell<gtk::ScrollablePolicy>,
+        vscroll_policy: Cell<gtk::ScrollablePolicy>,
     }
 
     impl Default for ChosttyTerminalAreaPriv {
