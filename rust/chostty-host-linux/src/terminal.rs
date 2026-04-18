@@ -159,7 +159,6 @@ type WidgetCallback = dyn Fn(&gtk::Widget);
 /// Per-surface state, stored in a global registry keyed by surface pointer.
 struct SurfaceEntry {
     gl_area: ChosttyTerminalArea,
-    #[allow(dead_code)]
     scrolled_window: gtk::ScrolledWindow,
     suppress_vadj_signal: Rc<Cell<bool>>,
     toast_overlay: gtk::Overlay,
@@ -745,6 +744,14 @@ unsafe extern "C" fn ghostty_action_cb(
                     unsafe {
                         ghostty_surface_update_config(surface, config);
                     }
+                    // Re-apply the scrollbar policy in case it changed.
+                    let policy = scrollbar_policy_from_config(config);
+                    let surface_key = surface as usize;
+                    SURFACE_MAP.with(|map| {
+                        if let Some(entry) = map.borrow().get(&surface_key) {
+                            entry.scrolled_window.set_vscrollbar_policy(policy);
+                        }
+                    });
                 }
                 _ => {}
             }
