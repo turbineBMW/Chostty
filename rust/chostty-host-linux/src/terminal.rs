@@ -1174,6 +1174,10 @@ pub fn create_terminal(
     // Skip the action when we're inside a programmatic SCROLLBAR update
     // (guarded by suppress_vadj_signal).
     {
+        // GtkScrolledWindow creates one internal vadjustment for its
+        // lifetime and installs it onto the Scrollable child; the object
+        // returned here is the same one ChosttyTerminalArea will expose via
+        // its Scrollable interface after realize.
         let vadj = scrolled_window.vadjustment();
         let surface_cell = surface_cell.clone();
         let suppress = suppress_vadj_signal.clone();
@@ -1187,6 +1191,8 @@ pub fn create_terminal(
             };
             let row = adj.value().round() as usize;
             let action = format!("scroll_to_row:{row}");
+            // The C API takes a length-bounded slice (not a C string), so
+            // `action` does not need a trailing NUL.
             unsafe {
                 ghostty_surface_binding_action(
                     surface,
