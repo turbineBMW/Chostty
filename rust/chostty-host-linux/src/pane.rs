@@ -637,6 +637,23 @@ pub fn close_active_tab_in_pane(pane_widget: &gtk::Widget) -> bool {
     true
 }
 
+/// Walk descendants (depth-first, in sibling order) and return the first
+/// widget that is focusable and can actually take focus right now. Used as
+/// a last-resort fallback when GTK's built-in focus chain traversal fails.
+fn first_focusable_descendant(widget: &gtk::Widget) -> Option<gtk::Widget> {
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        if current.is_focusable() && current.is_sensitive() {
+            return Some(current);
+        }
+        if let Some(found) = first_focusable_descendant(&current) {
+            return Some(found);
+        }
+        child = current.next_sibling();
+    }
+    None
+}
+
 pub fn focus_active_tab_in_pane(pane_widget: &gtk::Widget) -> bool {
     let Some(internals) = find_pane_internals(pane_widget) else {
         return false;
@@ -668,10 +685,24 @@ pub fn focus_active_tab_in_pane(pane_widget: &gtk::Widget) -> bool {
     if let Some(entry) = ts.tabs.iter().find(|e| e.id == tab_id) {
         let content = entry.content.clone();
         drop(ts);
-        if content.is_focus() || content.can_focus() {
-            content.grab_focus();
-        } else {
-            content.child_focus(gtk::DirectionType::TabForward);
+
+        // Tab content is typically a GtkOverlay wrapping a terminal GLArea.
+        // `grab_focus` on the overlay *should* delegate to the first focusable
+        // descendant, but in GTK4 this silently fails after a workspace or
+        // pane teardown has invalidated the window's focus chain — grab_focus
+        // returns false and the GLArea never becomes the focus widget. Walk
+        // descendants ourselves and grab focus directly when that happens.
+        if !content.grab_focus() {
+            if let Some(target) = first_focusable_descendant(&content) {
+                let descendant_type = target.type_().name();
+                let ok = target.grab_focus();
+                tracing::debug!(
+                    event = "focus_active_tab_descendant_fallback",
+                    %descendant_type,
+                    grab_ok = ok,
+                    "container grab_focus failed; fell back to direct descendant grab"
+                );
+            }
         }
     }
 

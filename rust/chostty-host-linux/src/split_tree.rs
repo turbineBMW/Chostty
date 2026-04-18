@@ -344,13 +344,18 @@ impl SplitTreeContainer {
         let widget = build_widget_tree(&tree, &self.state);
         self.bin.append(&widget);
 
-        // Newly created panes are tracked as pane containers rather than the
-        // inner terminal/browser widget, so restore through the pane helper
-        // when possible and fall back to plain widget focus otherwise.
-        if let Some(focused) = self.focused_pane.borrow().as_ref() {
-            if !pane::focus_active_tab_in_pane(focused) {
-                focused.grab_focus();
-            }
+        // Defer focus to a second idle tick: after `bin.append(widget)` the
+        // newly re-parented pane subtree still needs one pass of GTK's
+        // layout/realize/map cycle before grab_focus() on a descendant will
+        // actually land. Calling it inline races that pass and the focus is
+        // dropped — which is exactly what the user sees after closing a
+        // split pane.
+        if let Some(focused) = self.focused_pane.borrow().clone() {
+            glib::idle_add_local_once(move || {
+                if !pane::focus_active_tab_in_pane(&focused) {
+                    focused.grab_focus();
+                }
+            });
         }
     }
 
