@@ -2115,3 +2115,59 @@ mod tests {
         assert!(claim_wakeup_idle_slot(&flag));
     }
 }
+
+/// Map a `scrollbar` config enum tag name (as returned by `ghostty_config_get`)
+/// to a GTK scrollbar visibility policy. Unknown/invalid values default to
+/// `Automatic`, matching upstream Ghostty's `closureScrollbarPolicy` behavior.
+#[allow(dead_code)]
+fn scrollbar_policy_from_tag(tag: &[u8]) -> gtk::PolicyType {
+    match tag {
+        b"never" => gtk::PolicyType::Never,
+        _ => gtk::PolicyType::Automatic,
+    }
+}
+
+/// Read the `scrollbar` key from a libghostty `ghostty_config_t` and return
+/// the corresponding GTK scrollbar policy. On any read failure we default to
+/// `Automatic` (system default).
+///
+/// The returned string is owned by the config — do not free it.
+#[allow(dead_code)]
+fn scrollbar_policy_from_config(config: ghostty_config_t) -> gtk::PolicyType {
+    let mut out: *const c_char = std::ptr::null();
+    let ok = unsafe {
+        ghostty_config_get(
+            config,
+            &mut out as *mut _ as *mut c_void,
+            b"scrollbar".as_ptr() as *const c_char,
+            "scrollbar".len(),
+        )
+    };
+    if !ok || out.is_null() {
+        return gtk::PolicyType::Automatic;
+    }
+    let tag = unsafe { std::ffi::CStr::from_ptr(out) }.to_bytes();
+    scrollbar_policy_from_tag(tag)
+}
+
+#[cfg(test)]
+mod scrollbar_policy_tests {
+    use super::gtk::PolicyType;
+    use super::scrollbar_policy_from_tag;
+
+    #[test]
+    fn system_maps_to_automatic() {
+        assert_eq!(scrollbar_policy_from_tag(b"system"), PolicyType::Automatic);
+    }
+
+    #[test]
+    fn never_maps_to_never() {
+        assert_eq!(scrollbar_policy_from_tag(b"never"), PolicyType::Never);
+    }
+
+    #[test]
+    fn unknown_defaults_to_automatic() {
+        assert_eq!(scrollbar_policy_from_tag(b"garbage"), PolicyType::Automatic);
+        assert_eq!(scrollbar_policy_from_tag(b""), PolicyType::Automatic);
+    }
+}

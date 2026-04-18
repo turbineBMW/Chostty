@@ -598,7 +598,12 @@ pub fn move_active_tab_in_pane(pane_widget: &gtk::Widget, delta: i32) -> bool {
             return false;
         };
 
-        tracing::info!(event = "tab_reorder", from = active_idx, to = target_idx, "tab reordered");
+        tracing::info!(
+            event = "tab_reorder",
+            from = active_idx,
+            to = target_idx,
+            "tab reordered"
+        );
         let entry = tab_state.tabs.remove(active_idx);
         let active_tab_id = entry.id.clone();
         tab_state.tabs.insert(target_idx, entry);
@@ -2981,15 +2986,15 @@ const CHOSTTY_BROWSER_EDITABLE_STATE_SCRIPT: &str = r#"
 /// Extract host (and port) from a URI for privacy-safe logging.
 /// Never logs path, query, fragment, or userinfo — only the host[:port] portion.
 fn log_host_only(uri: &str) -> String {
-    let after_scheme = uri.splitn(2, "://").nth(1).unwrap_or(uri);
-    let without_path = after_scheme.splitn(2, '/').next().unwrap_or(after_scheme);
-    let without_query = without_path.splitn(2, '?').next().unwrap_or(without_path);
-    let without_fragment = without_query.splitn(2, '#').next().unwrap_or(without_query);
+    let after_scheme = uri.split_once("://").map(|x| x.1).unwrap_or(uri);
+    let without_path = after_scheme.split('/').next().unwrap_or(after_scheme);
+    let without_query = without_path.split('?').next().unwrap_or(without_path);
+    let without_fragment = without_query.split('#').next().unwrap_or(without_query);
     // Strip userinfo (e.g. `user:pass@host` → `host`) by taking the part AFTER the last `@`.
-    // Using rsplitn in case the host itself contains `@` in weird URIs — we always want
+    // Using rsplit in case the host itself contains `@` in weird URIs — we always want
     // the rightmost segment.
     without_fragment
-        .rsplitn(2, '@')
+        .rsplit('@')
         .next()
         .unwrap_or(without_fragment)
         .to_string()

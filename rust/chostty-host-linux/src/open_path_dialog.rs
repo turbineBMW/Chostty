@@ -334,6 +334,7 @@ pub fn present_open_path_dialog(input: OpenPathDialogInput) {
     schedule_cursor_to_end(&entry);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rebuild_session_from_entry(
     entry: &gtk::Entry,
     suggestions_list: &gtk::ListBox,
@@ -360,6 +361,7 @@ fn rebuild_session_from_entry(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sync_path_input_ui(
     entry: &gtk::Entry,
     suggestions_list: &gtk::ListBox,
@@ -402,6 +404,7 @@ fn sync_path_input_ui(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn move_suggestion_selection(
     entry: &gtk::Entry,
     suggestions_list: &gtk::ListBox,
@@ -427,7 +430,7 @@ fn move_suggestion_selection(
         let len = suggestions.len();
         match (state.suggestion_session.selected_index, delta.is_negative()) {
             (Some(index), true) if index > 0 => index - 1,
-            (Some(index), true) if index == 0 => len - 1,
+            (Some(0), true) => len - 1,
             (Some(index), false) if index + 1 < len => index + 1,
             (Some(_), false) => 0,
             (None, true) => len - 1,
@@ -449,6 +452,7 @@ fn move_suggestion_selection(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dismiss_suggestions_for_enter(
     entry: &gtk::Entry,
     suggestions_list: &gtk::ListBox,
@@ -481,6 +485,7 @@ fn dismiss_suggestions_for_enter(
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn commit_suggestion_selection(
     entry: &gtk::Entry,
     suggestions_list: &gtk::ListBox,
@@ -512,6 +517,7 @@ fn commit_suggestion_selection(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_separator_for_selection(
     entry: &gtk::Entry,
     suggestions_list: &gtk::ListBox,

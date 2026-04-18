@@ -139,10 +139,9 @@ fn init_tracing(dir: &Path) -> io::Result<()> {
         .filename_prefix("chostty")
         .filename_suffix("log")
         .build(dir)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // ANSI off: the file should contain plain text, not escape codes.
     let layer = fmt::layer()
@@ -156,7 +155,7 @@ fn init_tracing(dir: &Path) -> io::Result<()> {
         .with(filter)
         .with(layer)
         .try_init()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
     Ok(())
 }
@@ -165,8 +164,7 @@ fn init_tracing(dir: &Path) -> io::Result<()> {
 /// stderr subscriber so `tracing!` calls are at least visible if the app
 /// is launched from a terminal.
 fn init_tracing_stderr_fallback() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let layer = fmt::layer().with_ansi(false);
     let _ = tracing_subscriber::registry()
         .with(filter)
@@ -273,7 +271,11 @@ mod tests {
             "fallback path must end in 'chostty': got {:?}",
             got
         );
-        assert!(got.is_absolute(), "fallback path must be absolute: got {:?}", got);
+        assert!(
+            got.is_absolute(),
+            "fallback path must be absolute: got {:?}",
+            got
+        );
 
         match prev {
             Some(v) => std::env::set_var("XDG_STATE_HOME", v),
