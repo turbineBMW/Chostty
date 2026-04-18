@@ -1179,6 +1179,17 @@ pub fn create_terminal(
     // Terminal scrollback is discrete-row; kinetic scrolling feels wrong
     // (matches upstream Ghostty's workaround).
     scrolled_window.set_kinetic_scrolling(false);
+    // GtkScrolledWindow is focusable=true by default (so Tab-traversal can
+    // reach its scrollbars). Our pane's focus machinery — both GTK's
+    // child_focus and pane.rs's first_focusable_descendant fallback used on
+    // pane/workspace close — walks the widget tree and stops at the first
+    // focusable widget it finds. With the default, that becomes the
+    // ScrolledWindow itself instead of the ChosttyTerminalArea inside, and
+    // the terminal silently stops receiving key events. Making the
+    // ScrolledWindow non-focusable lets the walk descend to the terminal.
+    // The scrollbar widgets themselves are already focusable=false, so
+    // there's no Tab-nav regression.
+    scrolled_window.set_focusable(false);
     scrolled_window.set_child(Some(&gl_area));
     scrolled_window.set_hexpand(true);
     scrolled_window.set_vexpand(true);
