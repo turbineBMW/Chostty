@@ -1113,7 +1113,9 @@ pub fn create_terminal(
     let scrolled_window = gtk::ScrolledWindow::new();
     scrolled_window.set_hscrollbar_policy(gtk::PolicyType::Never);
     scrolled_window.set_vscrollbar_policy(vscrollbar_policy);
-    scrolled_window.set_overlay_scrolling(true);
+    // Leave overlay_scrolling at GTK's default so users who disable it
+    // globally (~/.config/gtk-4.0/settings.ini → gtk-overlay-scrolling=false)
+    // get consistent behavior between Chostty and upstream Ghostty.
     // Terminal scrollback is discrete-row; kinetic scrolling feels wrong
     // (matches upstream Ghostty's workaround).
     scrolled_window.set_kinetic_scrolling(false);
