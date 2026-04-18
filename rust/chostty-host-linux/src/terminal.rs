@@ -2131,7 +2131,9 @@ fn scrollbar_policy_from_tag(tag: &[u8]) -> gtk::PolicyType {
 /// the corresponding GTK scrollbar policy. On any read failure we default to
 /// `Automatic` (system default).
 ///
-/// The returned string is owned by the config — do not free it.
+/// The returned string is a comptime-static enum name (`@tagName` in Zig)
+/// with unbounded lifetime, independent of the config's lifetime. Do not
+/// free it; it remains valid even after `ghostty_config_free`.
 #[allow(dead_code)]
 fn scrollbar_policy_from_config(config: ghostty_config_t) -> gtk::PolicyType {
     let mut out: *const c_char = std::ptr::null();
