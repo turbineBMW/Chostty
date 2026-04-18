@@ -113,29 +113,31 @@ The existing `EventControllerScroll` at `terminal.rs:1449` stays on the inner `C
 
 ### Reading `scrollbar` from Ghostty config
 
-libghostty's `Config.zig:1403` defines `scrollbar: Scrollbar = .system`, with values `.system` and `.never`. Read it via `ghostty_config_get(config, out, "scrollbar", 9)` in a helper:
+libghostty's `Config.zig:1403` defines `scrollbar: Scrollbar = .system`, with values `.system` and `.never`. `ghostty_config_get` returns enum values as **null-terminated strings** (per `c_get.zig:62–65` — `ptr.* = @tagName(value)`), not as discriminants.
 
 ```rust
 fn scrollbar_policy_from_config(config: ghostty_config_t) -> gtk::PolicyType {
-    let mut value: c_int = 0;
+    let mut out: *const c_char = std::ptr::null();
     let ok = unsafe {
         ghostty_config_get(
             config,
-            &mut value as *mut _ as *mut c_void,
-            b"scrollbar".as_ptr() as *const _,
+            &mut out as *mut _ as *mut c_void,
+            b"scrollbar".as_ptr() as *const c_char,
             "scrollbar".len(),
         )
     };
-    if !ok { return gtk::PolicyType::Automatic; }
-    match value {
-        0 => gtk::PolicyType::Automatic,  // .system
-        1 => gtk::PolicyType::Never,      // .never
-        _ => gtk::PolicyType::Automatic,  // default / unknown
+    if !ok || out.is_null() {
+        return gtk::PolicyType::Automatic;
+    }
+    let s = unsafe { std::ffi::CStr::from_ptr(out) }.to_bytes();
+    match s {
+        b"never" => gtk::PolicyType::Never,
+        _ => gtk::PolicyType::Automatic, // "system" and any unknown value
     }
 }
 ```
 
-Confirmed against `Config.zig:10153`: `pub const Scrollbar = enum { system, never };` → `system = 0`, `never = 1`.
+The returned string is owned by the config — do not free it. String comparison is also forward-compatible if Ghostty adds new enum variants.
 
 ### Initial apply
 
