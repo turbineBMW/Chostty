@@ -66,14 +66,14 @@ pub const GHOSTTY_ACTION_SCROLLBAR: c_int = 26;
 pub const GHOSTTY_ACTION_RENDER: c_int = 27;
 pub const GHOSTTY_ACTION_DESKTOP_NOTIFICATION: c_int = 31;
 pub const GHOSTTY_ACTION_SET_TITLE: c_int = 32;
-pub const GHOSTTY_ACTION_PWD: c_int = 34;
-pub const GHOSTTY_ACTION_MOUSE_SHAPE: c_int = 35;
-pub const GHOSTTY_ACTION_COLOR_CHANGE: c_int = 45;
-pub const GHOSTTY_ACTION_RELOAD_CONFIG: c_int = 46;
-pub const GHOSTTY_ACTION_CONFIG_CHANGE: c_int = 47;
-pub const GHOSTTY_ACTION_CLOSE_WINDOW: c_int = 48;
-pub const GHOSTTY_ACTION_RING_BELL: c_int = 49;
-pub const GHOSTTY_ACTION_SHOW_CHILD_EXITED: c_int = 54;
+pub const GHOSTTY_ACTION_PWD: c_int = 35;
+pub const GHOSTTY_ACTION_MOUSE_SHAPE: c_int = 36;
+pub const GHOSTTY_ACTION_COLOR_CHANGE: c_int = 46;
+pub const GHOSTTY_ACTION_RELOAD_CONFIG: c_int = 47;
+pub const GHOSTTY_ACTION_CONFIG_CHANGE: c_int = 48;
+pub const GHOSTTY_ACTION_CLOSE_WINDOW: c_int = 49;
+pub const GHOSTTY_ACTION_RING_BELL: c_int = 50;
+pub const GHOSTTY_ACTION_SHOW_CHILD_EXITED: c_int = 55;
 
 // Key codes (W3C UIEvents, subset)
 pub const GHOSTTY_KEY_UNIDENTIFIED: c_int = 0;
