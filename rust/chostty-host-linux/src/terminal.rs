@@ -161,7 +161,6 @@ struct SurfaceEntry {
     gl_area: ChosttyTerminalArea,
     #[allow(dead_code)]
     scrolled_window: gtk::ScrolledWindow,
-    #[allow(dead_code)]
     suppress_vadj_signal: Rc<Cell<bool>>,
     toast_overlay: gtk::Overlay,
     on_title_changed: Option<Box<TitleChangedCallback>>,
@@ -562,6 +561,30 @@ fn release_wakeup_idle_slot(flag: &AtomicBool) {
     flag.store(false, Ordering::Release);
 }
 
+fn apply_scrollbar_to_entry(entry: &SurfaceEntry, s: ghostty_action_scrollbar_s) {
+    let vadj = match entry.gl_area.vadjustment() {
+        Some(a) => a,
+        None => return,
+    };
+
+    let value = s.offset as f64;
+    let upper = s.total as f64;
+    let page_size = s.len as f64;
+
+    // Skip updates that wouldn't change the adjustment (upstream does the
+    // same; every pty redraw emits a SCROLLBAR action even if unchanged).
+    if (vadj.value() - value).abs() < 0.001
+        && (vadj.upper() - upper).abs() < 0.001
+        && (vadj.page_size() - page_size).abs() < 0.001
+    {
+        return;
+    }
+
+    entry.suppress_vadj_signal.set(true);
+    vadj.configure(value, 0.0, upper, 1.0, page_size, page_size);
+    entry.suppress_vadj_signal.set(false);
+}
+
 unsafe extern "C" fn ghostty_wakeup_cb(_userdata: *mut c_void) {
     // Collapse renderer wakeups to a single pending idle source so text floods
     // do not enqueue unbounded GTK callbacks on the main thread.
@@ -589,6 +612,18 @@ unsafe extern "C" fn ghostty_action_cb(
                 SURFACE_MAP.with(|map| {
                     if let Some(entry) = map.borrow().get(&surface_key) {
                         entry.gl_area.queue_render();
+                    }
+                });
+            }
+            true
+        }
+        GHOSTTY_ACTION_SCROLLBAR => {
+            if target.tag == GHOSTTY_TARGET_SURFACE {
+                let surface_key = unsafe { target.target.surface } as usize;
+                let s = unsafe { action.action.scrollbar };
+                SURFACE_MAP.with(|map| {
+                    if let Some(entry) = map.borrow().get(&surface_key) {
+                        apply_scrollbar_to_entry(entry, s);
                     }
                 });
             }
