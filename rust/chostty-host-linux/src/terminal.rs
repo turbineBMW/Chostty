@@ -17,6 +17,123 @@ use std::time::Duration;
 use chostty_ghostty_sys::*;
 
 // ---------------------------------------------------------------------------
+// ChosttyTerminalArea — a GLArea subclass that implements Gtk.Scrollable.
+//
+// The Scrollable interface is pure property plumbing: we just store the
+// four properties (hadjustment, vadjustment, hscroll-policy, vscroll-policy)
+// so that a surrounding GtkScrolledWindow can install its adjustments on
+// us. GTK handles the rest — including the overlay-scrollbar fade-in /
+// widen-on-hover behavior we want.
+// ---------------------------------------------------------------------------
+
+mod terminal_area {
+    use std::cell::{Cell, RefCell};
+
+    use gtk::glib;
+    use gtk::prelude::*;
+    use gtk::subclass::prelude::*;
+    use gtk4 as gtk;
+
+    pub struct ChosttyTerminalAreaPriv {
+        pub hadjustment: RefCell<Option<gtk::Adjustment>>,
+        pub vadjustment: RefCell<Option<gtk::Adjustment>>,
+        pub hscroll_policy: Cell<gtk::ScrollablePolicy>,
+        pub vscroll_policy: Cell<gtk::ScrollablePolicy>,
+    }
+
+    impl Default for ChosttyTerminalAreaPriv {
+        fn default() -> Self {
+            Self {
+                hadjustment: RefCell::new(None),
+                vadjustment: RefCell::new(None),
+                hscroll_policy: Cell::new(gtk::ScrollablePolicy::Minimum),
+                vscroll_policy: Cell::new(gtk::ScrollablePolicy::Minimum),
+            }
+        }
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for ChosttyTerminalAreaPriv {
+        const NAME: &'static str = "ChosttyTerminalArea";
+        type Type = super::ChosttyTerminalArea;
+        type ParentType = gtk::GLArea;
+        type Interfaces = (gtk::Scrollable,);
+    }
+
+    impl ObjectImpl for ChosttyTerminalAreaPriv {
+        fn properties() -> &'static [glib::ParamSpec] {
+            use std::sync::OnceLock;
+            static PROPERTIES: OnceLock<Vec<glib::ParamSpec>> = OnceLock::new();
+            PROPERTIES.get_or_init(|| {
+                vec![
+                    glib::ParamSpecOverride::for_interface::<gtk::Scrollable>("hadjustment"),
+                    glib::ParamSpecOverride::for_interface::<gtk::Scrollable>("vadjustment"),
+                    glib::ParamSpecOverride::for_interface::<gtk::Scrollable>("hscroll-policy"),
+                    glib::ParamSpecOverride::for_interface::<gtk::Scrollable>("vscroll-policy"),
+                ]
+            })
+        }
+
+        fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
+            match pspec.name() {
+                "hadjustment" => {
+                    let adj: Option<gtk::Adjustment> = value.get().unwrap();
+                    *self.hadjustment.borrow_mut() = adj;
+                }
+                "vadjustment" => {
+                    let adj: Option<gtk::Adjustment> = value.get().unwrap();
+                    *self.vadjustment.borrow_mut() = adj;
+                }
+                "hscroll-policy" => {
+                    let p: gtk::ScrollablePolicy = value.get().unwrap();
+                    self.hscroll_policy.set(p);
+                }
+                "vscroll-policy" => {
+                    let p: gtk::ScrollablePolicy = value.get().unwrap();
+                    self.vscroll_policy.set(p);
+                }
+                _ => unreachable!("unknown Scrollable property: {}", pspec.name()),
+            }
+        }
+
+        fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+            match pspec.name() {
+                "hadjustment" => self.hadjustment.borrow().to_value(),
+                "vadjustment" => self.vadjustment.borrow().to_value(),
+                "hscroll-policy" => self.hscroll_policy.get().to_value(),
+                "vscroll-policy" => self.vscroll_policy.get().to_value(),
+                _ => unreachable!("unknown Scrollable property: {}", pspec.name()),
+            }
+        }
+    }
+
+    impl WidgetImpl for ChosttyTerminalAreaPriv {}
+    impl GLAreaImpl for ChosttyTerminalAreaPriv {}
+    impl ScrollableImpl for ChosttyTerminalAreaPriv {}
+}
+
+glib::wrapper! {
+    /// A GLArea subclass that implements `Gtk.Scrollable`. Otherwise behaves
+    /// exactly like `gtk::GLArea` for our host-side usage.
+    pub struct ChosttyTerminalArea(ObjectSubclass<terminal_area::ChosttyTerminalAreaPriv>)
+        @extends gtk::GLArea, gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Scrollable;
+}
+
+impl Default for ChosttyTerminalArea {
+    fn default() -> Self {
+        glib::Object::new()
+    }
+}
+
+impl ChosttyTerminalArea {
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Global Ghostty app singleton
 // ---------------------------------------------------------------------------
 
@@ -2171,5 +2288,28 @@ mod scrollbar_policy_tests {
     fn unknown_defaults_to_automatic() {
         assert_eq!(scrollbar_policy_from_tag(b"garbage"), PolicyType::Automatic);
         assert_eq!(scrollbar_policy_from_tag(b""), PolicyType::Automatic);
+    }
+}
+
+#[cfg(test)]
+mod terminal_area_tests {
+    use super::gtk;
+    use super::ChosttyTerminalArea;
+    use gtk::prelude::*;
+
+    #[test]
+    fn vadjustment_round_trips() {
+        // Skip if no display — ::init() fails in headless environments.
+        if gtk::init().is_err() {
+            return;
+        }
+        let area = ChosttyTerminalArea::new();
+        assert!(ScrollableExt::vadjustment(&area).is_none());
+
+        let adj = gtk::Adjustment::new(0.0, 0.0, 100.0, 1.0, 10.0, 10.0);
+        ScrollableExt::set_vadjustment(&area, Some(&adj));
+        let got = ScrollableExt::vadjustment(&area).expect("vadj set");
+        assert_eq!(got.upper(), 100.0);
+        assert_eq!(got.page_size(), 10.0);
     }
 }
