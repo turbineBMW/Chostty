@@ -736,9 +736,21 @@ unsafe extern "C" fn ghostty_action_cb(
         GHOSTTY_ACTION_RELOAD_CONFIG => {
             let config = load_ghostty_config();
             match target.tag {
-                GHOSTTY_TARGET_APP => unsafe {
-                    ghostty_app_update_config(app, config);
-                },
+                GHOSTTY_TARGET_APP => {
+                    unsafe {
+                        ghostty_app_update_config(app, config);
+                    }
+                    // ghostty_app_update_config doesn't fire per-surface
+                    // RELOAD_CONFIG, so walk SURFACE_MAP ourselves so live
+                    // changes (e.g., dark-mode toggle) also update every
+                    // pane's scrollbar policy.
+                    let policy = scrollbar_policy_from_config(config);
+                    SURFACE_MAP.with(|map| {
+                        for entry in map.borrow().values() {
+                            entry.scrolled_window.set_vscrollbar_policy(policy);
+                        }
+                    });
+                }
                 GHOSTTY_TARGET_SURFACE => {
                     let surface = unsafe { target.target.surface };
                     unsafe {
