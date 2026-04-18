@@ -17,6 +17,123 @@ use std::time::Duration;
 use chostty_ghostty_sys::*;
 
 // ---------------------------------------------------------------------------
+// ChosttyTerminalArea — a GLArea subclass that implements Gtk.Scrollable.
+//
+// The Scrollable interface is pure property plumbing: we just store the
+// four properties (hadjustment, vadjustment, hscroll-policy, vscroll-policy)
+// so that a surrounding GtkScrolledWindow can install its adjustments on
+// us. GTK handles the rest — including the overlay-scrollbar fade-in /
+// widen-on-hover behavior we want.
+// ---------------------------------------------------------------------------
+
+mod terminal_area {
+    use std::cell::{Cell, RefCell};
+
+    use gtk4 as gtk;
+
+    use gtk::glib;
+    use gtk::prelude::*;
+    use gtk::subclass::prelude::*;
+
+    pub struct ChosttyTerminalAreaPriv {
+        hadjustment: RefCell<Option<gtk::Adjustment>>,
+        vadjustment: RefCell<Option<gtk::Adjustment>>,
+        hscroll_policy: Cell<gtk::ScrollablePolicy>,
+        vscroll_policy: Cell<gtk::ScrollablePolicy>,
+    }
+
+    impl Default for ChosttyTerminalAreaPriv {
+        fn default() -> Self {
+            Self {
+                hadjustment: RefCell::new(None),
+                vadjustment: RefCell::new(None),
+                hscroll_policy: Cell::new(gtk::ScrollablePolicy::Minimum),
+                vscroll_policy: Cell::new(gtk::ScrollablePolicy::Minimum),
+            }
+        }
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for ChosttyTerminalAreaPriv {
+        const NAME: &'static str = "ChosttyTerminalArea";
+        type Type = super::ChosttyTerminalArea;
+        type ParentType = gtk::GLArea;
+        type Interfaces = (gtk::Scrollable,);
+    }
+
+    impl ObjectImpl for ChosttyTerminalAreaPriv {
+        fn properties() -> &'static [glib::ParamSpec] {
+            use std::sync::OnceLock;
+            static PROPERTIES: OnceLock<Vec<glib::ParamSpec>> = OnceLock::new();
+            PROPERTIES.get_or_init(|| {
+                vec![
+                    glib::ParamSpecOverride::for_interface::<gtk::Scrollable>("hadjustment"),
+                    glib::ParamSpecOverride::for_interface::<gtk::Scrollable>("vadjustment"),
+                    glib::ParamSpecOverride::for_interface::<gtk::Scrollable>("hscroll-policy"),
+                    glib::ParamSpecOverride::for_interface::<gtk::Scrollable>("vscroll-policy"),
+                ]
+            })
+        }
+
+        fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
+            match pspec.name() {
+                "hadjustment" => {
+                    let adj: Option<gtk::Adjustment> = value.get().unwrap();
+                    *self.hadjustment.borrow_mut() = adj;
+                }
+                "vadjustment" => {
+                    let adj: Option<gtk::Adjustment> = value.get().unwrap();
+                    *self.vadjustment.borrow_mut() = adj;
+                }
+                "hscroll-policy" => {
+                    let p: gtk::ScrollablePolicy = value.get().unwrap();
+                    self.hscroll_policy.set(p);
+                }
+                "vscroll-policy" => {
+                    let p: gtk::ScrollablePolicy = value.get().unwrap();
+                    self.vscroll_policy.set(p);
+                }
+                _ => unreachable!("unknown Scrollable property: {}", pspec.name()),
+            }
+        }
+
+        fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+            match pspec.name() {
+                "hadjustment" => self.hadjustment.borrow().to_value(),
+                "vadjustment" => self.vadjustment.borrow().to_value(),
+                "hscroll-policy" => self.hscroll_policy.get().to_value(),
+                "vscroll-policy" => self.vscroll_policy.get().to_value(),
+                _ => unreachable!("unknown Scrollable property: {}", pspec.name()),
+            }
+        }
+    }
+
+    impl WidgetImpl for ChosttyTerminalAreaPriv {}
+    impl GLAreaImpl for ChosttyTerminalAreaPriv {}
+    impl ScrollableImpl for ChosttyTerminalAreaPriv {}
+}
+
+glib::wrapper! {
+    /// A GLArea subclass that implements `Gtk.Scrollable`. Otherwise behaves
+    /// exactly like `gtk::GLArea` for our host-side usage.
+    pub struct ChosttyTerminalArea(ObjectSubclass<terminal_area::ChosttyTerminalAreaPriv>)
+        @extends gtk::GLArea, gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Scrollable;
+}
+
+impl Default for ChosttyTerminalArea {
+    fn default() -> Self {
+        glib::Object::new()
+    }
+}
+
+impl ChosttyTerminalArea {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Global Ghostty app singleton
 // ---------------------------------------------------------------------------
 
@@ -41,7 +158,9 @@ type WidgetCallback = dyn Fn(&gtk::Widget);
 
 /// Per-surface state, stored in a global registry keyed by surface pointer.
 struct SurfaceEntry {
-    gl_area: gtk::GLArea,
+    gl_area: ChosttyTerminalArea,
+    scrolled_window: gtk::ScrolledWindow,
+    suppress_vadj_signal: Rc<Cell<bool>>,
     toast_overlay: gtk::Overlay,
     on_title_changed: Option<Box<TitleChangedCallback>>,
     on_pwd_changed: Option<Box<PwdChangedCallback>>,
@@ -166,7 +285,7 @@ thread_local! {
 #[derive(Clone)]
 pub struct TerminalHandle {
     surface_cell: Rc<RefCell<Option<ghostty_surface_t>>>,
-    gl_area: gtk::GLArea,
+    gl_area: ChosttyTerminalArea,
     search_bar: gtk::SearchBar,
     search_entry: gtk::SearchEntry,
     callbacks: Rc<RefCell<TerminalCallbacks>>,
@@ -283,7 +402,7 @@ fn terminal_search_action(query: &str) -> String {
     format!("search:{query}")
 }
 
-fn request_terminal_focus(gl_area: &gtk::GLArea, had_focus: &Cell<bool>) {
+fn request_terminal_focus(gl_area: &ChosttyTerminalArea, had_focus: &Cell<bool>) {
     had_focus.set(true);
     gl_area.grab_focus();
 }
@@ -441,6 +560,36 @@ fn release_wakeup_idle_slot(flag: &AtomicBool) {
     flag.store(false, Ordering::Release);
 }
 
+/// Apply a SCROLLBAR action payload to a surface's vertical adjustment.
+///
+/// Caution: callers typically hold a `SURFACE_MAP` borrow for the duration
+/// of this function. `vadj.configure` emits `changed` / `value-changed`
+/// synchronously; any handler connected to those signals must NOT reenter
+/// `SURFACE_MAP.with(...)` or a `RefCell` double-borrow panic will occur.
+fn apply_scrollbar_to_entry(entry: &SurfaceEntry, s: ghostty_action_scrollbar_s) {
+    let vadj = match entry.gl_area.vadjustment() {
+        Some(a) => a,
+        None => return,
+    };
+
+    let value = s.offset as f64;
+    let upper = s.total as f64;
+    let page_size = s.len as f64;
+
+    // Skip updates that wouldn't change the adjustment (upstream does the
+    // same; every pty redraw emits a SCROLLBAR action even if unchanged).
+    if (vadj.value() - value).abs() < 0.001
+        && (vadj.upper() - upper).abs() < 0.001
+        && (vadj.page_size() - page_size).abs() < 0.001
+    {
+        return;
+    }
+
+    entry.suppress_vadj_signal.set(true);
+    vadj.configure(value, 0.0, upper, 1.0, page_size, page_size);
+    entry.suppress_vadj_signal.set(false);
+}
+
 unsafe extern "C" fn ghostty_wakeup_cb(_userdata: *mut c_void) {
     // Collapse renderer wakeups to a single pending idle source so text floods
     // do not enqueue unbounded GTK callbacks on the main thread.
@@ -468,6 +617,18 @@ unsafe extern "C" fn ghostty_action_cb(
                 SURFACE_MAP.with(|map| {
                     if let Some(entry) = map.borrow().get(&surface_key) {
                         entry.gl_area.queue_render();
+                    }
+                });
+            }
+            true
+        }
+        GHOSTTY_ACTION_SCROLLBAR => {
+            if target.tag == GHOSTTY_TARGET_SURFACE {
+                let surface_key = unsafe { target.target.surface } as usize;
+                let s = unsafe { action.action.scrollbar };
+                SURFACE_MAP.with(|map| {
+                    if let Some(entry) = map.borrow().get(&surface_key) {
+                        apply_scrollbar_to_entry(entry, s);
                     }
                 });
             }
@@ -575,14 +736,34 @@ unsafe extern "C" fn ghostty_action_cb(
         GHOSTTY_ACTION_RELOAD_CONFIG => {
             let config = load_ghostty_config();
             match target.tag {
-                GHOSTTY_TARGET_APP => unsafe {
-                    ghostty_app_update_config(app, config);
-                },
+                GHOSTTY_TARGET_APP => {
+                    unsafe {
+                        ghostty_app_update_config(app, config);
+                    }
+                    // ghostty_app_update_config doesn't fire per-surface
+                    // RELOAD_CONFIG, so walk SURFACE_MAP ourselves so live
+                    // changes (e.g., dark-mode toggle) also update every
+                    // pane's scrollbar policy.
+                    let policy = scrollbar_policy_from_config(config);
+                    SURFACE_MAP.with(|map| {
+                        for entry in map.borrow().values() {
+                            entry.scrolled_window.set_vscrollbar_policy(policy);
+                        }
+                    });
+                }
                 GHOSTTY_TARGET_SURFACE => {
                     let surface = unsafe { target.target.surface };
                     unsafe {
                         ghostty_surface_update_config(surface, config);
                     }
+                    // Re-apply the scrollbar policy in case it changed.
+                    let policy = scrollbar_policy_from_config(config);
+                    let surface_key = surface as usize;
+                    SURFACE_MAP.with(|map| {
+                        if let Some(entry) = map.borrow().get(&surface_key) {
+                            entry.scrolled_window.set_vscrollbar_policy(policy);
+                        }
+                    });
                 }
                 _ => {}
             }
@@ -957,7 +1138,7 @@ pub fn create_terminal(
     options: TerminalOptions,
     callbacks: TerminalCallbacks,
 ) -> TerminalWidget {
-    let gl_area = gtk::GLArea::new();
+    let gl_area = ChosttyTerminalArea::new();
     gl_area.add_css_class("chostty-terminal-glarea");
     gl_area.set_hexpand(true);
     gl_area.set_vexpand(true);
@@ -979,10 +1160,72 @@ pub fn create_terminal(
     let clipboard_context_cell: Rc<Cell<*mut ClipboardContext>> =
         Rc::new(Cell::new(ptr::null_mut()));
 
+    // Read the scrollbar policy from libghostty's config.
+    let vscrollbar_policy = {
+        let config = load_ghostty_config();
+        let policy = scrollbar_policy_from_config(config);
+        unsafe { ghostty_config_free(config) };
+        policy
+    };
+
+    // Wrap the GLArea in a ScrolledWindow so GTK's overlay scrollbar
+    // machinery fades the scrollbar in on scroll / mouse activity.
+    let scrolled_window = gtk::ScrolledWindow::new();
+    scrolled_window.set_hscrollbar_policy(gtk::PolicyType::Never);
+    scrolled_window.set_vscrollbar_policy(vscrollbar_policy);
+    // Leave overlay_scrolling at GTK's default so users who disable it
+    // globally (~/.config/gtk-4.0/settings.ini → gtk-overlay-scrolling=false)
+    // get consistent behavior between Chostty and upstream Ghostty.
+    // Terminal scrollback is discrete-row; kinetic scrolling feels wrong
+    // (matches upstream Ghostty's workaround).
+    scrolled_window.set_kinetic_scrolling(false);
+    scrolled_window.set_child(Some(&gl_area));
+    scrolled_window.set_hexpand(true);
+    scrolled_window.set_vexpand(true);
+
+    // Reentrancy guard: set true while we programmatically update the
+    // vadjustment from a SCROLLBAR action so the value-changed handler
+    // doesn't turn around and emit scroll_to_row back into libghostty.
+    let suppress_vadj_signal = Rc::new(Cell::new(false));
+
+    // Wire the vadjustment's value-changed signal so user drags on the
+    // scrollbar handle translate to scroll_to_row:<n> binding actions.
+    // Skip the action when we're inside a programmatic SCROLLBAR update
+    // (guarded by suppress_vadj_signal).
+    {
+        // GtkScrolledWindow creates one internal vadjustment for its
+        // lifetime and installs it onto the Scrollable child; the object
+        // returned here is the same one ChosttyTerminalArea will expose via
+        // its Scrollable interface after realize.
+        let vadj = scrolled_window.vadjustment();
+        let surface_cell = surface_cell.clone();
+        let suppress = suppress_vadj_signal.clone();
+        vadj.connect_value_changed(move |adj| {
+            if suppress.get() {
+                return;
+            }
+            let surface = match *surface_cell.borrow() {
+                Some(s) => s,
+                None => return,
+            };
+            let row = adj.value().round() as usize;
+            let action = format!("scroll_to_row:{row}");
+            // The C API takes a length-bounded slice (not a C string), so
+            // `action` does not need a trailing NUL.
+            unsafe {
+                ghostty_surface_binding_action(
+                    surface,
+                    action.as_ptr() as *const c_char,
+                    action.len(),
+                );
+            }
+        });
+    }
+
     // Create overlay early so closures can capture it for toast notifications
     let overlay = gtk::Overlay::new();
     overlay.add_css_class("chostty-terminal-surface");
-    overlay.set_child(Some(&gl_area));
+    overlay.set_child(Some(&scrolled_window));
     overlay.set_hexpand(true);
     overlay.set_vexpand(true);
 
@@ -1069,6 +1312,8 @@ pub fn create_terminal(
     {
         let gl = gl_area.clone();
         let overlay_for_map = overlay.clone();
+        let scrolled_window = scrolled_window.clone();
+        let suppress_vadj_signal = suppress_vadj_signal.clone();
         let surface_cell = surface_cell.clone();
         let callbacks = callbacks.clone();
         let had_focus = had_focus.clone();
@@ -1148,6 +1393,8 @@ pub fn create_terminal(
                     surface_key,
                     SurfaceEntry {
                         gl_area: gl.clone(),
+                        scrolled_window: scrolled_window.clone(),
+                        suppress_vadj_signal: suppress_vadj_signal.clone(),
                         toast_overlay: overlay_for_map.clone(),
                         on_title_changed: Some(Box::new({
                             let cb = callbacks.clone();
@@ -1579,7 +1826,7 @@ fn surface_action(surface: Option<ghostty_surface_t>, action: &str) {
 }
 
 fn show_terminal_context_menu(
-    gl_area: &gtk::GLArea,
+    gl_area: &ChosttyTerminalArea,
     surface: Option<ghostty_surface_t>,
     callbacks: &Rc<RefCell<TerminalCallbacks>>,
     x: f64,
@@ -2113,5 +2360,84 @@ mod tests {
         release_wakeup_idle_slot(&flag);
 
         assert!(claim_wakeup_idle_slot(&flag));
+    }
+}
+
+/// Map a `scrollbar` config enum tag name (as returned by `ghostty_config_get`)
+/// to a GTK scrollbar visibility policy. Unknown/invalid values default to
+/// `Automatic`, matching upstream Ghostty's `closureScrollbarPolicy` behavior.
+fn scrollbar_policy_from_tag(tag: &[u8]) -> gtk::PolicyType {
+    match tag {
+        b"never" => gtk::PolicyType::Never,
+        _ => gtk::PolicyType::Automatic,
+    }
+}
+
+/// Read the `scrollbar` key from a libghostty `ghostty_config_t` and return
+/// the corresponding GTK scrollbar policy. On any read failure we default to
+/// `Automatic` (system default).
+///
+/// The returned string is a comptime-static enum name (`@tagName` in Zig)
+/// with unbounded lifetime, independent of the config's lifetime. Do not
+/// free it; it remains valid even after `ghostty_config_free`.
+fn scrollbar_policy_from_config(config: ghostty_config_t) -> gtk::PolicyType {
+    let mut out: *const c_char = std::ptr::null();
+    let ok = unsafe {
+        ghostty_config_get(
+            config,
+            &mut out as *mut _ as *mut c_void,
+            b"scrollbar".as_ptr() as *const c_char,
+            "scrollbar".len(),
+        )
+    };
+    if !ok || out.is_null() {
+        return gtk::PolicyType::Automatic;
+    }
+    let tag = unsafe { std::ffi::CStr::from_ptr(out) }.to_bytes();
+    scrollbar_policy_from_tag(tag)
+}
+
+#[cfg(test)]
+mod scrollbar_policy_tests {
+    use super::gtk::PolicyType;
+    use super::scrollbar_policy_from_tag;
+
+    #[test]
+    fn system_maps_to_automatic() {
+        assert_eq!(scrollbar_policy_from_tag(b"system"), PolicyType::Automatic);
+    }
+
+    #[test]
+    fn never_maps_to_never() {
+        assert_eq!(scrollbar_policy_from_tag(b"never"), PolicyType::Never);
+    }
+
+    #[test]
+    fn unknown_defaults_to_automatic() {
+        assert_eq!(scrollbar_policy_from_tag(b"garbage"), PolicyType::Automatic);
+        assert_eq!(scrollbar_policy_from_tag(b""), PolicyType::Automatic);
+    }
+}
+
+#[cfg(test)]
+mod terminal_area_tests {
+    use super::gtk;
+    use super::ChosttyTerminalArea;
+    use gtk::prelude::*;
+
+    #[test]
+    fn vadjustment_round_trips() {
+        // Skip if no display — ::init() fails in headless environments.
+        if gtk::init().is_err() {
+            return;
+        }
+        let area = ChosttyTerminalArea::new();
+        assert!(ScrollableExt::vadjustment(&area).is_none());
+
+        let adj = gtk::Adjustment::new(0.0, 0.0, 100.0, 1.0, 10.0, 10.0);
+        ScrollableExt::set_vadjustment(&area, Some(&adj));
+        let got = ScrollableExt::vadjustment(&area).expect("vadj set");
+        assert_eq!(got.upper(), 100.0);
+        assert_eq!(got.page_size(), 10.0);
     }
 }

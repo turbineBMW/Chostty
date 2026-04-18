@@ -1,8 +1,8 @@
 mod app_config;
 mod control_bridge;
-mod logging;
 mod keybind_editor;
 mod layout_state;
+mod logging;
 mod notification_sound;
 mod open_path_dialog;
 mod pane;

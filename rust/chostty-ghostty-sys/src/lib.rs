@@ -62,17 +62,18 @@ pub const GHOSTTY_ACTION_NEW_WINDOW: c_int = 1;
 pub const GHOSTTY_ACTION_NEW_TAB: c_int = 2;
 pub const GHOSTTY_ACTION_CLOSE_TAB: c_int = 3;
 pub const GHOSTTY_ACTION_NEW_SPLIT: c_int = 4;
+pub const GHOSTTY_ACTION_SCROLLBAR: c_int = 26;
 pub const GHOSTTY_ACTION_RENDER: c_int = 27;
 pub const GHOSTTY_ACTION_DESKTOP_NOTIFICATION: c_int = 31;
 pub const GHOSTTY_ACTION_SET_TITLE: c_int = 32;
-pub const GHOSTTY_ACTION_PWD: c_int = 34;
-pub const GHOSTTY_ACTION_MOUSE_SHAPE: c_int = 35;
-pub const GHOSTTY_ACTION_COLOR_CHANGE: c_int = 45;
-pub const GHOSTTY_ACTION_RELOAD_CONFIG: c_int = 46;
-pub const GHOSTTY_ACTION_CONFIG_CHANGE: c_int = 47;
-pub const GHOSTTY_ACTION_CLOSE_WINDOW: c_int = 48;
-pub const GHOSTTY_ACTION_RING_BELL: c_int = 49;
-pub const GHOSTTY_ACTION_SHOW_CHILD_EXITED: c_int = 54;
+pub const GHOSTTY_ACTION_PWD: c_int = 35;
+pub const GHOSTTY_ACTION_MOUSE_SHAPE: c_int = 36;
+pub const GHOSTTY_ACTION_COLOR_CHANGE: c_int = 46;
+pub const GHOSTTY_ACTION_RELOAD_CONFIG: c_int = 47;
+pub const GHOSTTY_ACTION_CONFIG_CHANGE: c_int = 48;
+pub const GHOSTTY_ACTION_CLOSE_WINDOW: c_int = 49;
+pub const GHOSTTY_ACTION_RING_BELL: c_int = 50;
+pub const GHOSTTY_ACTION_SHOW_CHILD_EXITED: c_int = 55;
 
 // Key codes (W3C UIEvents, subset)
 pub const GHOSTTY_KEY_UNIDENTIFIED: c_int = 0;
@@ -297,6 +298,7 @@ pub union ghostty_action_u {
     pub set_title: ghostty_action_set_title_s,
     pub pwd: ghostty_action_pwd_s,
     pub child_exited: ghostty_surface_message_childexited_s,
+    pub scrollbar: ghostty_action_scrollbar_s,
     _padding: [u8; 24],
 }
 
@@ -324,6 +326,14 @@ pub struct ghostty_action_pwd_s {
 pub struct ghostty_surface_message_childexited_s {
     pub exit_code: u32,
     pub runtime_ms: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ghostty_action_scrollbar_s {
+    pub total: u64,
+    pub offset: u64,
+    pub len: u64,
 }
 
 // Runtime config (callbacks)
@@ -450,4 +460,22 @@ extern "C" {
         confirmed: bool,
     );
     pub fn ghostty_surface_cancel_clipboard_request(surface: ghostty_surface_t, state: *mut c_void);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::size_of;
+
+    #[test]
+    fn scrollbar_struct_is_24_bytes() {
+        // Must match C: struct { uint64_t total; uint64_t offset; uint64_t len; }
+        assert_eq!(size_of::<ghostty_action_scrollbar_s>(), 24);
+    }
+
+    #[test]
+    fn action_union_is_24_bytes() {
+        // The scrollbar struct must not grow the union.
+        assert_eq!(size_of::<ghostty_action_u>(), 24);
+    }
 }
