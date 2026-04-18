@@ -1169,6 +1169,34 @@ pub fn create_terminal(
     // doesn't turn around and emit scroll_to_row back into libghostty.
     let suppress_vadj_signal = Rc::new(Cell::new(false));
 
+    // Wire the vadjustment's value-changed signal so user drags on the
+    // scrollbar handle translate to scroll_to_row:<n> binding actions.
+    // Skip the action when we're inside a programmatic SCROLLBAR update
+    // (guarded by suppress_vadj_signal).
+    {
+        let vadj = scrolled_window.vadjustment();
+        let surface_cell = surface_cell.clone();
+        let suppress = suppress_vadj_signal.clone();
+        vadj.connect_value_changed(move |adj| {
+            if suppress.get() {
+                return;
+            }
+            let surface = match *surface_cell.borrow() {
+                Some(s) => s,
+                None => return,
+            };
+            let row = adj.value().round() as usize;
+            let action = format!("scroll_to_row:{row}");
+            unsafe {
+                ghostty_surface_binding_action(
+                    surface,
+                    action.as_ptr() as *const c_char,
+                    action.len(),
+                );
+            }
+        });
+    }
+
     // Create overlay early so closures can capture it for toast notifications
     let overlay = gtk::Overlay::new();
     overlay.add_css_class("chostty-terminal-surface");
