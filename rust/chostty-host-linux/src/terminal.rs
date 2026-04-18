@@ -128,7 +128,6 @@ impl Default for ChosttyTerminalArea {
 }
 
 impl ChosttyTerminalArea {
-    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -159,7 +158,11 @@ type WidgetCallback = dyn Fn(&gtk::Widget);
 
 /// Per-surface state, stored in a global registry keyed by surface pointer.
 struct SurfaceEntry {
-    gl_area: gtk::GLArea,
+    gl_area: ChosttyTerminalArea,
+    #[allow(dead_code)]
+    scrolled_window: gtk::ScrolledWindow,
+    #[allow(dead_code)]
+    suppress_vadj_signal: Rc<Cell<bool>>,
     toast_overlay: gtk::Overlay,
     on_title_changed: Option<Box<TitleChangedCallback>>,
     on_pwd_changed: Option<Box<PwdChangedCallback>>,
@@ -284,7 +287,7 @@ thread_local! {
 #[derive(Clone)]
 pub struct TerminalHandle {
     surface_cell: Rc<RefCell<Option<ghostty_surface_t>>>,
-    gl_area: gtk::GLArea,
+    gl_area: ChosttyTerminalArea,
     search_bar: gtk::SearchBar,
     search_entry: gtk::SearchEntry,
     callbacks: Rc<RefCell<TerminalCallbacks>>,
@@ -401,7 +404,7 @@ fn terminal_search_action(query: &str) -> String {
     format!("search:{query}")
 }
 
-fn request_terminal_focus(gl_area: &gtk::GLArea, had_focus: &Cell<bool>) {
+fn request_terminal_focus(gl_area: &ChosttyTerminalArea, had_focus: &Cell<bool>) {
     had_focus.set(true);
     gl_area.grab_focus();
 }
@@ -1075,7 +1078,7 @@ pub fn create_terminal(
     options: TerminalOptions,
     callbacks: TerminalCallbacks,
 ) -> TerminalWidget {
-    let gl_area = gtk::GLArea::new();
+    let gl_area = ChosttyTerminalArea::new();
     gl_area.add_css_class("chostty-terminal-glarea");
     gl_area.set_hexpand(true);
     gl_area.set_vexpand(true);
@@ -1097,10 +1100,36 @@ pub fn create_terminal(
     let clipboard_context_cell: Rc<Cell<*mut ClipboardContext>> =
         Rc::new(Cell::new(ptr::null_mut()));
 
+    // Read the scrollbar policy from libghostty's config.
+    let vscrollbar_policy = {
+        let config = load_ghostty_config();
+        let policy = scrollbar_policy_from_config(config);
+        unsafe { ghostty_config_free(config) };
+        policy
+    };
+
+    // Wrap the GLArea in a ScrolledWindow so GTK's overlay scrollbar
+    // machinery fades the scrollbar in on scroll / mouse activity.
+    let scrolled_window = gtk::ScrolledWindow::new();
+    scrolled_window.set_hscrollbar_policy(gtk::PolicyType::Never);
+    scrolled_window.set_vscrollbar_policy(vscrollbar_policy);
+    scrolled_window.set_overlay_scrolling(true);
+    // Terminal scrollback is discrete-row; kinetic scrolling feels wrong
+    // (matches upstream Ghostty's workaround).
+    scrolled_window.set_kinetic_scrolling(false);
+    scrolled_window.set_child(Some(&gl_area));
+    scrolled_window.set_hexpand(true);
+    scrolled_window.set_vexpand(true);
+
+    // Reentrancy guard: set true while we programmatically update the
+    // vadjustment from a SCROLLBAR action so the value-changed handler
+    // doesn't turn around and emit scroll_to_row back into libghostty.
+    let suppress_vadj_signal = Rc::new(Cell::new(false));
+
     // Create overlay early so closures can capture it for toast notifications
     let overlay = gtk::Overlay::new();
     overlay.add_css_class("chostty-terminal-surface");
-    overlay.set_child(Some(&gl_area));
+    overlay.set_child(Some(&scrolled_window));
     overlay.set_hexpand(true);
     overlay.set_vexpand(true);
 
@@ -1187,6 +1216,8 @@ pub fn create_terminal(
     {
         let gl = gl_area.clone();
         let overlay_for_map = overlay.clone();
+        let scrolled_window = scrolled_window.clone();
+        let suppress_vadj_signal = suppress_vadj_signal.clone();
         let surface_cell = surface_cell.clone();
         let callbacks = callbacks.clone();
         let had_focus = had_focus.clone();
@@ -1266,6 +1297,8 @@ pub fn create_terminal(
                     surface_key,
                     SurfaceEntry {
                         gl_area: gl.clone(),
+                        scrolled_window: scrolled_window.clone(),
+                        suppress_vadj_signal: suppress_vadj_signal.clone(),
                         toast_overlay: overlay_for_map.clone(),
                         on_title_changed: Some(Box::new({
                             let cb = callbacks.clone();
@@ -1697,7 +1730,7 @@ fn surface_action(surface: Option<ghostty_surface_t>, action: &str) {
 }
 
 fn show_terminal_context_menu(
-    gl_area: &gtk::GLArea,
+    gl_area: &ChosttyTerminalArea,
     surface: Option<ghostty_surface_t>,
     callbacks: &Rc<RefCell<TerminalCallbacks>>,
     x: f64,
@@ -2237,7 +2270,6 @@ mod tests {
 /// Map a `scrollbar` config enum tag name (as returned by `ghostty_config_get`)
 /// to a GTK scrollbar visibility policy. Unknown/invalid values default to
 /// `Automatic`, matching upstream Ghostty's `closureScrollbarPolicy` behavior.
-#[allow(dead_code)]
 fn scrollbar_policy_from_tag(tag: &[u8]) -> gtk::PolicyType {
     match tag {
         b"never" => gtk::PolicyType::Never,
@@ -2252,7 +2284,6 @@ fn scrollbar_policy_from_tag(tag: &[u8]) -> gtk::PolicyType {
 /// The returned string is a comptime-static enum name (`@tagName` in Zig)
 /// with unbounded lifetime, independent of the config's lifetime. Do not
 /// free it; it remains valid even after `ghostty_config_free`.
-#[allow(dead_code)]
 fn scrollbar_policy_from_config(config: ghostty_config_t) -> gtk::PolicyType {
     let mut out: *const c_char = std::ptr::null();
     let ok = unsafe {
