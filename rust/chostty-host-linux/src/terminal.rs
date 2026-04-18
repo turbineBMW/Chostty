@@ -561,6 +561,12 @@ fn release_wakeup_idle_slot(flag: &AtomicBool) {
     flag.store(false, Ordering::Release);
 }
 
+/// Apply a SCROLLBAR action payload to a surface's vertical adjustment.
+///
+/// Caution: callers typically hold a `SURFACE_MAP` borrow for the duration
+/// of this function. `vadj.configure` emits `changed` / `value-changed`
+/// synchronously; any handler connected to those signals must NOT reenter
+/// `SURFACE_MAP.with(...)` or a `RefCell` double-borrow panic will occur.
 fn apply_scrollbar_to_entry(entry: &SurfaceEntry, s: ghostty_action_scrollbar_s) {
     let vadj = match entry.gl_area.vadjustment() {
         Some(a) => a,
