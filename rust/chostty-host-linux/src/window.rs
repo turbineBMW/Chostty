@@ -2686,7 +2686,12 @@ fn reorder_workspace_by_id(
             return false;
         }
 
-        tracing::info!(event = "workspace_reorder", from = source_idx, to = target_idx, "workspace reordered");
+        tracing::info!(
+            event = "workspace_reorder",
+            from = source_idx,
+            to = target_idx,
+            "workspace reordered"
+        );
         let active_workspace_id = s.active_workspace().map(|workspace| workspace.id.clone());
         let moving_workspace = s.workspaces.remove(source_idx);
         let Some(target_idx_after_removal) = s
@@ -3757,7 +3762,11 @@ fn switch_workspace(state: &State, idx: usize) {
         if idx >= s.workspaces.len() || idx == s.active_idx {
             return;
         }
-        tracing::info!(event = "workspace_switch", index = idx, "workspace switched");
+        tracing::info!(
+            event = "workspace_switch",
+            index = idx,
+            "workspace switched"
+        );
         s.active_idx = idx;
         let stack = s.stack.clone();
         let stack_name = format!("ws-{}", s.workspaces[idx].id);
